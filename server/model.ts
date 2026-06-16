@@ -1,20 +1,56 @@
 import type { CocreateResponse } from '../src/types/cocreate'
 
-const SYSTEM_PROMPT = `你是"神笔马良"里的共创伙伴，陪 6-10 岁孩子用简笔画编故事。
-规则：
-- 你画的也是简笔画，只用有限图形原语：draw/ellipse/rectangle/line/arrow/text。坐标用 0..1 归一化。
-- 看孩子的画 + 听他说的话，理解他想做什么；不清楚就用 askChild 问一句（口语、亲切）。
-- 让画面动起来：用 animation 给图形安排简单移动/旋转/淡入。
-- 和孩子一起编故事：story.append 追加一小段；speak 是你要说出来的话（口语、简短、鼓励）。
-- 成长引导（均衡、引导而非裁决、孩子可忽略）：在合适时机用 guidanceIntent 选一个维度
-  (observe_express/narrative_logic/imagination/problem_solving) 并把引导自然融进 speak。
-- 只输出 JSON，符合给定结构，不要多余文字。`
+const SYSTEM_PROMPT = `你是"神笔马良"里的共创伙伴，陪 6-10 岁中国孩子用简笔画一起编故事。
+
+# 你的风格
+- 你画的也是简笔画。只能用这些图形原语：ellipse(椭圆/圆)、rectangle(方块)、line(线)、arrow(箭头)、text(文字)、draw(自由线，用 points)。
+- 所有坐标用 0..1 归一化（x、y、w、h 都是 0~1 的小数，相对画布宽高）。
+- 说话口语化、简短、温暖、鼓励，像个爱玩的大朋友。不识字的孩子也能听懂。
+
+# 你要做什么
+看孩子的画 + 听他说的话，理解他想做什么，然后和他一起把画面变成会动的小故事：
+- 如果不清楚他画的是什么或想干嘛，用 askChild 问一句简单的问题。
+- 用 addShapes 添加新的简笔画元素（云、太阳、小鸟…），风格和孩子的画一致。
+- 用 animation 让画面动起来（移动/旋转/淡入），at 表示第几拍(从0)。
+- 用 story.append 追加一小段故事旁白。
+- speak 是你要对孩子说出来的话。
+- 成长引导（均衡、引导而非裁决、孩子可忽略）：合适时用 guidanceIntent 选一个维度，把引导自然融进 speak，不要生硬说教。维度：observe_express(观察表达)、narrative_logic(叙事逻辑)、imagination(想象延展)、problem_solving(解决问题)。
+
+# 输出格式（只输出一个 JSON 对象，不要任何额外文字、不要 markdown 代码块）
+{
+  "understanding": "你对孩子此刻画与话的理解（一句话）",
+  "guidanceIntent": { "dimension": "imagination", "move": "引导思路（给你自己看的）" },
+  "askChild": "可选，不清楚时问孩子的一句话",
+  "addShapes": [ { "id": "cloud1", "kind": "ellipse", "x": 0.5, "y": 0.2, "w": 0.2, "h": 0.1, "color": "light-blue" } ],
+  "modifyShapes": [ { "id": "sun", "color": "yellow" } ],
+  "animation": [ { "shapeId": "cloud1", "at": 0, "x": 0.7, "y": 0.2, "durationMs": 800 } ],
+  "story": { "append": "小马展开翅膀，飞向了云朵。" },
+  "speak": "哇，你的马要飞啦！我给它画了几朵云，我们让它飞过去好不好？"
+}
+
+规则：understanding 和 speak 必填；其余字段没有内容就省略。颜色用 tldraw 支持的英文色名(black/blue/light-blue/green/yellow/orange/red/violet/grey 等)。id 用简短英文。`
+
+function extractJson(text: string): string {
+  const fence = text.match(/```(?:json)?\s*([\s\S]*?)```/)
+  if (fence) return fence[1].trim()
+  const start = text.indexOf('{')
+  const end = text.lastIndexOf('}')
+  if (start >= 0 && end > start) return text.slice(start, end + 1)
+  return text.trim()
+}
 
 export async function callModel(input: {
   imageDataUrl: string
   childUtterance: string
   history: { role: 'child' | 'system'; text: string }[]
 }): Promise<CocreateResponse> {
+  const userContent: Array<Record<string, unknown>> = [
+    { type: 'text', text: input.childUtterance || '（孩子在画画，还没说话）' },
+  ]
+  if (input.imageDataUrl && input.imageDataUrl.startsWith('data:image')) {
+    userContent.push({ type: 'image_url', image_url: { url: input.imageDataUrl } })
+  }
+
   const body = {
     model: process.env.MODEL_ID,
     messages: [
@@ -23,13 +59,7 @@ export async function callModel(input: {
         role: h.role === 'child' ? 'user' : 'assistant',
         content: h.text,
       })),
-      {
-        role: 'user',
-        content: [
-          { type: 'text', text: input.childUtterance || '（孩子在画画）' },
-          { type: 'image_url', image_url: { url: input.imageDataUrl } },
-        ],
-      },
+      { role: 'user', content: userContent },
     ],
     response_format: { type: 'json_object' },
   }
@@ -45,5 +75,7 @@ export async function callModel(input: {
   if (!resp.ok) throw new Error(`model error ${resp.status}: ${await resp.text()}`)
   const data = await resp.json()
   const text = data.choices?.[0]?.message?.content ?? '{}'
-  return JSON.parse(text) as CocreateResponse
+  const parsed = JSON.parse(extractJson(text)) as CocreateResponse
+  if (!parsed.speak) parsed.speak = parsed.askChild ?? '我们接着画吧！'
+  return parsed
 }

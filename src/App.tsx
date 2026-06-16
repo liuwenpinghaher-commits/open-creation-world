@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react'
-import type { Editor } from 'tldraw'
+import { toRichText, type Editor } from 'tldraw'
 import './App.css'
 import { SketchCanvas } from './sketch/SketchCanvas'
 import { toTldrawShape } from './sketch/renderSketch'
@@ -21,7 +21,7 @@ export default function App() {
     const editor = editorRef.current
     if (!editor) return ''
     const ids = editor.getCurrentPageShapeIds()
-    // toImageDataUrl returns { url, width, height } directly — no FileReader needed
+    if (ids.size === 0) return '' // 空画布不导出，让 AI 仅凭语音共创
     const { url } = await editor.toImageDataUrl([...ids], { format: 'png', background: true })
     return url
   }
@@ -37,13 +37,38 @@ export default function App() {
 
       const bounds = editor.getViewportPageBounds()
       const canvas = { width: bounds.w, height: bounds.h }
+
       for (const spec of res.addShapes ?? []) {
-        editor.createShape(toTldrawShape(spec, canvas) as never)
+        try {
+          if (spec.kind === 'text' && spec.text) {
+            editor.createShape({
+              id: `shape:${spec.id}`,
+              type: 'text',
+              x: (typeof spec.x === 'number' ? spec.x : 0.4) * canvas.width,
+              y: (typeof spec.y === 'number' ? spec.y : 0.4) * canvas.height,
+              props: { richText: toRichText(spec.text), color: 'black' },
+            } as never)
+            continue
+          }
+          const shape = toTldrawShape(spec, canvas)
+          if (shape) editor.createShape(shape as never)
+        } catch (err) {
+          console.warn('createShape failed:', spec.id, err)
+        }
       }
-      if (res.animation?.length) await runAnimation(editor, res.animation, canvas)
+
+      if (res.animation?.length) {
+        try {
+          await runAnimation(editor, res.animation, canvas)
+        } catch (err) {
+          console.warn('animation failed:', err)
+        }
+      }
 
       setSession((s) => applyResponse(s, res, utterance))
       await speak(res.speak || res.askChild || '')
+    } catch (err) {
+      console.error('sendTurn failed:', err)
     } finally {
       setBusy(false)
     }

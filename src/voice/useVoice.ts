@@ -18,17 +18,20 @@ export function useVoice() {
   const stop = useCallback(async (): Promise<string> => {
     const mr = recorder.current
     if (!mr) return ''
+    const mime = mr.mimeType || 'audio/webm'
     const done = new Promise<Blob>((resolve) => {
-      mr.onstop = () => resolve(new Blob(chunks.current, { type: 'audio/webm' }))
+      mr.onstop = () => resolve(new Blob(chunks.current, { type: mime }))
     })
     mr.stop()
     setRecording(false)
+    mr.stream.getTracks().forEach((t) => t.stop()) // 关掉麦克风指示灯
     const blob = await done
     const resp = await fetch('/api/stt', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/octet-stream' },
+      headers: { 'Content-Type': blob.type || 'audio/webm' },
       body: await blob.arrayBuffer(),
     })
+    if (!resp.ok) return ''
     const { text } = await resp.json()
     return text ?? ''
   }, [])
@@ -40,9 +43,10 @@ export function useVoice() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ text }),
     })
+    if (!resp.ok) return
     const buf = await resp.arrayBuffer()
-    if (buf.byteLength === 0) return // TTS 未接入时跳过
-    const url = URL.createObjectURL(new Blob([buf], { type: 'audio/mpeg' }))
+    if (buf.byteLength === 0) return // TTS 无输出时跳过
+    const url = URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }))
     await new Audio(url).play()
   }, [])
 

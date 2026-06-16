@@ -1,13 +1,62 @@
-// STT: 接收音频 buffer 返回文字；TTS: 接收文字返回音频 buffer。
-// 第一阶段占位；执行时按所选在线语音 API 填充。前端拿到空结果会自动降级。
-export async function transcribe(audio: Buffer): Promise<string> {
-  // TODO(执行时): 调所选在线 STT API，返回识别文本。
-  void audio
-  return ''
+// 真实语音：TTS=qwen-tts、STT=qwen3-asr-flash（阿里百炼 DashScope）。
+const GEN_URL = 'https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation'
+
+async function fetchRetry(url: string, init: RequestInit, tries = 3): Promise<Response> {
+  let lastErr: unknown
+  for (let i = 0; i < tries; i++) {
+    try {
+      const r = await fetch(url, init)
+      // 4xx（非 429）是请求问题，不重试；5xx/429/网络错误重试
+      if (r.ok || (r.status < 500 && r.status !== 429)) return r
+      lastErr = new Error(`status ${r.status}`)
+    } catch (e) {
+      lastErr = e
+    }
+    await new Promise((res) => setTimeout(res, 800 * (i + 1)))
+  }
+  throw lastErr ?? new Error('fetch failed')
 }
 
+/** 文本 → 语音字节（wav）。qwen-tts 返回音频 url，再下载其字节。 */
 export async function synthesize(text: string): Promise<Buffer> {
-  // TODO(执行时): 调所选在线 TTS API，返回音频字节。
-  void text
-  return Buffer.alloc(0)
+  if (!text.trim()) return Buffer.alloc(0)
+  const resp = await fetchRetry(GEN_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${process.env.VOICE_API_KEY}`,
+    },
+    body: JSON.stringify({ model: 'qwen-tts', input: { text, voice: 'Cherry' } }),
+  })
+  if (!resp.ok) throw new Error(`tts error ${resp.status}: ${await resp.text()}`)
+  const data = await resp.json()
+  const url: string | undefined = data?.output?.audio?.url
+  if (!url) return Buffer.alloc(0)
+  const audioResp = await fetchRetry(url, {})
+  if (!audioResp.ok) return Buffer.alloc(0)
+  return Buffer.from(await audioResp.arrayBuffer())
+}
+
+/** 语音字节 → 文本。base64 data uri 走 qwen3-asr-flash（OpenAI 兼容 input_audio）。 */
+export async function transcribe(audio: Buffer, mime = 'audio/webm'): Promise<string> {
+  if (!audio || audio.length === 0) return ''
+  const dataUri = `data:${mime};base64,${audio.toString('base64')}`
+  const resp = await fetchRetry(`${process.env.MODEL_BASE_URL}/chat/completions`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${process.env.MODEL_API_KEY}`,
+    },
+    body: JSON.stringify({
+      model: 'qwen3-asr-flash',
+      messages: [{ role: 'user', content: [{ type: 'input_audio', input_audio: { data: dataUri } }] }],
+      stream: false,
+    }),
+  })
+  if (!resp.ok) throw new Error(`asr error ${resp.status}: ${await resp.text()}`)
+  const data = await resp.json()
+  const content = data?.choices?.[0]?.message?.content
+  if (typeof content === 'string') return content
+  if (Array.isArray(content)) return content.map((c: { text?: string }) => c?.text ?? '').join('')
+  return ''
 }
