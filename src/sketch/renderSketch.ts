@@ -1,6 +1,7 @@
 import type { SketchShapeSpec } from '../types/cocreate'
 
-type Canvas = { width: number; height: number }
+/** offsetX/offsetY 为当前视口在 page 坐标系的左上角，确保 AI 画的内容落在孩子正在看的区域 */
+type Canvas = { width: number; height: number; offsetX?: number; offsetY?: number }
 
 export type TldrawShapePartial = {
   id: string
@@ -47,12 +48,14 @@ export function normPoints(pts: unknown): Pt[] {
  */
 export function toTldrawShape(spec: SketchShapeSpec, canvas: Canvas): TldrawShapePartial | null {
   const { width: W, height: H } = canvas
+  const ox = canvas.offsetX ?? 0
+  const oy = canvas.offsetY ?? 0
   const id = `shape:${spec.id}`
   const color = normColor(spec.color)
 
   if (spec.kind === 'ellipse' || spec.kind === 'rectangle') {
-    const x = (typeof spec.x === 'number' ? spec.x : 0.4) * W
-    const y = (typeof spec.y === 'number' ? spec.y : 0.4) * H
+    const x = ox + (typeof spec.x === 'number' ? spec.x : 0.4) * W
+    const y = oy + (typeof spec.y === 'number' ? spec.y : 0.4) * H
     const w = Math.max(8, (spec.w ?? 0.12) * W)
     const h = Math.max(8, (spec.h ?? 0.12) * H)
     return {
@@ -69,7 +72,7 @@ export function toTldrawShape(spec: SketchShapeSpec, canvas: Canvas): TldrawShap
       const minX = Math.min(...xs)
       const minY = Math.min(...ys)
       return {
-        id, type: 'draw', x: minX * W, y: minY * H,
+        id, type: 'draw', x: ox + minX * W, y: oy + minY * H,
         props: {
           segments: [{
             type: 'free',

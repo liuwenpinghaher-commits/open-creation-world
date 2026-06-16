@@ -1,7 +1,7 @@
 import dotenv from 'dotenv'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
-dotenv.config({ path: join(dirname(fileURLToPath(import.meta.url)), '.env') })
+dotenv.config({ path: join(dirname(fileURLToPath(import.meta.url)), '.env'), override: true })
 
 import express from 'express'
 import { callModel } from './model'

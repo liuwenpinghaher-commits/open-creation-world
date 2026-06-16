@@ -15,7 +15,7 @@ if (!globalThis.CSS.supports) {
   })
 }
 
-if (!window.matchMedia) {
+if (typeof window !== 'undefined' && !window.matchMedia) {
   Object.defineProperty(window, 'matchMedia', {
     value: () => ({
       matches: false,

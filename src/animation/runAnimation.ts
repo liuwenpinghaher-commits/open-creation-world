@@ -5,8 +5,10 @@ import type { AnimationStep } from '../types/cocreate'
 export async function runAnimation(
   editor: Editor,
   steps: AnimationStep[],
-  canvas: { width: number; height: number }
+  canvas: { width: number; height: number; offsetX?: number; offsetY?: number }
 ) {
+  const ox = canvas.offsetX ?? 0
+  const oy = canvas.offsetY ?? 0
   const ordered = [...steps].sort((a, b) => a.at - b.at)
   for (const step of ordered) {
     const id = `shape:${step.shapeId}` as TLShapeId
@@ -16,8 +18,8 @@ export async function runAnimation(
       {
         id,
         type: shape.type,
-        x: step.x != null ? step.x * canvas.width : shape.x,
-        y: step.y != null ? step.y * canvas.height : shape.y,
+        x: step.x != null ? ox + step.x * canvas.width : shape.x,
+        y: step.y != null ? oy + step.y * canvas.height : shape.y,
         rotation: step.rotation ?? shape.rotation,
         opacity: step.opacity ?? shape.opacity,
       },

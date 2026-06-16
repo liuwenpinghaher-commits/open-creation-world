@@ -35,8 +35,12 @@ export default function App() {
       const payload = buildRequest({ imageDataUrl, childUtterance: utterance, history: session.dialog })
       const res = await requestCocreate(payload)
 
-      const bounds = editor.getViewportPageBounds()
-      const canvas = { width: bounds.w, height: bounds.h }
+      // 视口正常则把 AI 内容放进当前视野；若 viewport 退化（容器未测量），回退固定逻辑画布并 zoomToFit
+      const vp = editor.getViewportPageBounds()
+      const ok = !!vp && vp.w > 50 && vp.h > 50
+      const canvas = ok
+        ? { width: vp.w, height: vp.h, offsetX: vp.x, offsetY: vp.y }
+        : { width: 1000, height: 700, offsetX: 0, offsetY: 0 }
 
       for (const spec of res.addShapes ?? []) {
         try {
@@ -44,8 +48,8 @@ export default function App() {
             editor.createShape({
               id: `shape:${spec.id}`,
               type: 'text',
-              x: (typeof spec.x === 'number' ? spec.x : 0.4) * canvas.width,
-              y: (typeof spec.y === 'number' ? spec.y : 0.4) * canvas.height,
+              x: canvas.offsetX + (typeof spec.x === 'number' ? spec.x : 0.4) * canvas.width,
+              y: canvas.offsetY + (typeof spec.y === 'number' ? spec.y : 0.4) * canvas.height,
               props: { richText: toRichText(spec.text), color: 'black' },
             } as never)
             continue
@@ -54,6 +58,14 @@ export default function App() {
           if (shape) editor.createShape(shape as never)
         } catch (err) {
           console.warn('createShape failed:', spec.id, err)
+        }
+      }
+
+      if (!ok) {
+        try {
+          editor.zoomToFit({ animation: { duration: 400 } })
+        } catch (err) {
+          console.warn('zoomToFit failed:', err)
         }
       }
 
