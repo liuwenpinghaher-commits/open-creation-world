@@ -74,7 +74,7 @@ describe('完整共创会话流程（确定性）', () => {
       { width: 1000, height: 700, offsetX: 200, offsetY: 100 }
     )
     expect(shape).not.toBeNull()
-    expect(shape!.type).toBe('draw')
+    expect(shape!.type).toBe('geo') // 线条类用包围盒椭圆近似
     expect(shape!.x).toBe(500) // offsetX 200 + minX 0.3*1000
     expect(shape!.y).toBe(380) // offsetY 100 + minY 0.4*700
   })

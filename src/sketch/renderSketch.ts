@@ -64,26 +64,30 @@ export function toTldrawShape(spec: SketchShapeSpec, canvas: Canvas): TldrawShap
     }
   }
 
+  // line/arrow/draw 的 tldraw 原生格式版本敏感（draw 需要 segments.path 等，构造错会导致校验崩溃）。
+  // 为稳定起见，用点的包围盒近似成一个细椭圆；兼容 AI 用 points 或 x1/y1/x2/y2 两种写法；无点则跳过。
   if (spec.kind === 'line' || spec.kind === 'arrow' || spec.kind === 'draw') {
-    const pts = normPoints(spec.points)
-    if (pts.length >= 2) {
-      const xs = pts.map((p) => p.x)
-      const ys = pts.map((p) => p.y)
-      const minX = Math.min(...xs)
-      const minY = Math.min(...ys)
-      return {
-        id, type: 'draw', x: ox + minX * W, y: oy + minY * H,
-        props: {
-          segments: [{
-            type: 'free',
-            points: pts.map((p) => ({ x: (p.x - minX) * W, y: (p.y - minY) * H, z: 0.5 })),
-          }],
-          color, size: 'm', dash: 'draw', fill: 'none',
-          isClosed: false, isComplete: true, isPen: false,
-        },
-      }
+    let pts = normPoints(spec.points)
+    const s = spec as unknown as { x1?: number; y1?: number; x2?: number; y2?: number }
+    if (pts.length < 2 && typeof s.x1 === 'number' && typeof s.y1 === 'number' && typeof s.x2 === 'number' && typeof s.y2 === 'number') {
+      pts = [{ x: s.x1, y: s.y1 }, { x: s.x2, y: s.y2 }]
     }
-    return null
+    if (pts.length < 2) return null
+    const xs = pts.map((p) => p.x)
+    const ys = pts.map((p) => p.y)
+    const minX = Math.min(...xs)
+    const maxX = Math.max(...xs)
+    const minY = Math.min(...ys)
+    const maxY = Math.max(...ys)
+    return {
+      id, type: 'geo', x: ox + minX * W, y: oy + minY * H,
+      props: {
+        geo: 'ellipse',
+        w: Math.max(6, (maxX - minX) * W),
+        h: Math.max(6, (maxY - minY) * H),
+        color, dash: 'draw', fill: 'none',
+      },
+    }
   }
 
   return null

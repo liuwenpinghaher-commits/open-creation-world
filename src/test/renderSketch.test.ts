@@ -24,12 +24,11 @@ describe('toTldrawShape', () => {
       CANVAS
     )
     expect(out).not.toBeNull()
-    expect(out!.type).toBe('draw')
+    expect(out!.type).toBe('geo') // 线条类用包围盒椭圆近似（避免脆弱的 draw 原生格式）
     expect(out!.x).toBe(200) // bbox 左上 minX=0.2 → 200
     expect(out!.y).toBe(160) // minY=0.2 → 160
     expect(Number.isNaN(out!.x)).toBe(false)
-    const segs = out!.props.segments as Array<{ points: { x: number; y: number }[] }>
-    expect(segs[0].points.length).toBe(3)
+    expect(out!.props.geo).toBe('ellipse')
   })
 
   it('非法颜色回退 black，别名映射', () => {

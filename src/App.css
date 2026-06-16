@@ -110,3 +110,18 @@ body,
   padding: 8px 12px;
   border-radius: 999px;
 }
+
+.hint {
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  margin-bottom: 12px;
+  white-space: nowrap;
+  background: #fff3cd;
+  color: #6b5800;
+  padding: 8px 16px;
+  border-radius: 999px;
+  font-size: 15px;
+  box-shadow: 0 4px 14px rgb(40 50 66 / 16%);
+}

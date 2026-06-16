@@ -10,12 +10,20 @@ import { buildRequest } from './cocreate/buildRequest'
 import { applyResponse, emptySession } from './store/sessionStore'
 import type { SessionState } from './types/cocreate'
 
+type Phase = 'idle' | 'recording' | 'thinking'
+
 export default function App() {
   const editorRef = useRef<Editor | null>(null)
   const [session, setSession] = useState<SessionState>(emptySession())
-  const [busy, setBusy] = useState(false)
+  const [phase, setPhase] = useState<Phase>('idle')
   const [typed, setTyped] = useState('')
-  const { recording, start, stop, speak } = useVoice()
+  const [hint, setHint] = useState('')
+  const { start, stop, speak } = useVoice()
+
+  function flashHint(msg: string) {
+    setHint(msg)
+    window.setTimeout(() => setHint(''), 4000)
+  }
 
   async function exportCanvasPng(): Promise<string> {
     const editor = editorRef.current
@@ -26,63 +34,94 @@ export default function App() {
     return url
   }
 
-  async function sendTurn(utterance: string) {
+  /** 一拍共创：导出画 + 发后端 + 渲染 AI 简笔画/动画/故事 + 语音讲述。不管理 phase（由调用方管理） */
+  async function runTurn(utterance: string) {
     const editor = editorRef.current
-    if (!editor || busy) return
-    setBusy(true)
-    try {
-      const imageDataUrl = await exportCanvasPng()
-      const payload = buildRequest({ imageDataUrl, childUtterance: utterance, history: session.dialog })
-      const res = await requestCocreate(payload)
+    if (!editor) return
+    const imageDataUrl = await exportCanvasPng()
+    const payload = buildRequest({ imageDataUrl, childUtterance: utterance, history: session.dialog })
+    const res = await requestCocreate(payload)
 
-      const vp = editor.getViewportPageBounds()
-      const ok = !!vp && vp.w > 50 && vp.h > 50
-      const canvas = ok
-        ? { width: vp.w, height: vp.h, offsetX: vp.x, offsetY: vp.y }
-        : { width: 1000, height: 700, offsetX: 0, offsetY: 0 }
+    const vp = editor.getViewportPageBounds()
+    const ok = !!vp && vp.w > 50 && vp.h > 50
+    const canvas = ok
+      ? { width: vp.w, height: vp.h, offsetX: vp.x, offsetY: vp.y }
+      : { width: 1000, height: 700, offsetX: 0, offsetY: 0 }
 
-      for (const spec of res.addShapes ?? []) {
-        try {
-          if (spec.kind === 'text' && spec.text) {
-            editor.createShape({
-              id: `shape:${spec.id}`,
-              type: 'text',
-              x: canvas.offsetX + (typeof spec.x === 'number' ? spec.x : 0.4) * canvas.width,
-              y: canvas.offsetY + (typeof spec.y === 'number' ? spec.y : 0.4) * canvas.height,
-              props: { richText: toRichText(spec.text), color: 'black' },
-            } as never)
-            continue
-          }
-          const shape = toTldrawShape(spec, canvas)
-          if (shape) editor.createShape(shape as never)
-        } catch (err) {
-          console.warn('createShape failed:', spec.id, err)
+    for (const spec of res.addShapes ?? []) {
+      try {
+        if (spec.kind === 'text' && spec.text) {
+          editor.createShape({
+            id: `shape:${spec.id}`,
+            type: 'text',
+            x: canvas.offsetX + (typeof spec.x === 'number' ? spec.x : 0.4) * canvas.width,
+            y: canvas.offsetY + (typeof spec.y === 'number' ? spec.y : 0.4) * canvas.height,
+            props: { richText: toRichText(spec.text), color: 'black' },
+          } as never)
+          continue
         }
+        const shape = toTldrawShape(spec, canvas)
+        if (shape) editor.createShape(shape as never)
+      } catch (err) {
+        console.warn('createShape failed:', spec.id, err)
       }
-
-      if (!ok) {
-        try {
-          editor.zoomToFit({ animation: { duration: 400 } })
-        } catch (err) {
-          console.warn('zoomToFit failed:', err)
-        }
-      }
-
-      if (res.animation?.length) {
-        try {
-          await runAnimation(editor, res.animation, canvas)
-        } catch (err) {
-          console.warn('animation failed:', err)
-        }
-      }
-
-      setSession((s) => applyResponse(s, res, utterance))
-      await speak(res.speak || res.askChild || '')
-    } catch (err) {
-      console.error('sendTurn failed:', err)
-    } finally {
-      setBusy(false)
     }
+
+    if (!ok) {
+      try {
+        editor.zoomToFit({ animation: { duration: 400 } })
+      } catch (err) {
+        console.warn('zoomToFit failed:', err)
+      }
+    }
+
+    if (res.animation?.length) {
+      try {
+        await runAnimation(editor, res.animation, canvas)
+      } catch (err) {
+        console.warn('animation failed:', err)
+      }
+    }
+
+    setSession((s) => applyResponse(s, res, utterance))
+    await speak(res.speak || res.askChild || '')
+  }
+
+  // 点击切换录音：点一下开始，再点一下结束并识别（避免“按住松开”在按钮外松手停不下来）
+  async function handleMic() {
+    if (phase === 'thinking') return
+    if (phase === 'recording') {
+      setPhase('thinking')
+      try {
+        const text = await stop()
+        if (text && text.trim()) await runTurn(text.trim())
+        else flashHint('没听清，再说一次，或在右边打字告诉我～')
+      } catch (err) {
+        console.error('voice turn failed:', err)
+        flashHint('语音出了点小问题，先用打字试试吧～')
+      } finally {
+        setPhase('idle')
+      }
+    } else {
+      try {
+        await start()
+        setPhase('recording')
+      } catch (err) {
+        console.error('mic start failed:', err)
+        flashHint('打不开麦克风，检查一下浏览器麦克风权限～')
+        setPhase('idle')
+      }
+    }
+  }
+
+  function submitTyped() {
+    if (phase === 'thinking' || !typed.trim()) return
+    const t = typed.trim()
+    setTyped('')
+    setPhase('thinking')
+    runTurn(t)
+      .catch((err) => { console.error('typed turn failed:', err); flashHint('刚才没成功，再试一次～') })
+      .finally(() => setPhase('idle'))
   }
 
   function setTool(name: 'draw' | 'eraser') {
@@ -97,6 +136,8 @@ export default function App() {
     const ids = [...ed.getCurrentPageShapeIds()]
     if (ids.length) ed.deleteShapes(ids)
   }
+
+  const micLabel = phase === 'thinking' ? '✏️ 我在想…' : phase === 'recording' ? '🔴 说完了，点我' : '🎙️ 点我说话'
 
   return (
     <div className="shenbi">
@@ -116,28 +157,19 @@ export default function App() {
       </div>
 
       <div className="talk-bar">
-        <button
-          className="talk-btn"
-          onMouseDown={start}
-          onMouseUp={async () => {
-            const text = await stop()
-            if (text) void sendTurn(text)
-          }}
-        >
-          {recording ? '🎤 在听…' : '按住说话'}
+        {hint ? <span className="hint">{hint}</span> : null}
+        <button className="talk-btn" type="button" onClick={handleMic} disabled={phase === 'thinking'}>
+          {micLabel}
         </button>
         <input
           value={typed}
           placeholder="（或在这里打字告诉我）"
+          disabled={phase === 'thinking'}
           onChange={(e) => setTyped(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === 'Enter' && typed.trim()) {
-              void sendTurn(typed.trim())
-              setTyped('')
-            }
+            if (e.key === 'Enter') submitTyped()
           }}
         />
-        {busy && <span className="thinking">✏️ 我在想…</span>}
       </div>
     </div>
   )
