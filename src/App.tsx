@@ -35,7 +35,6 @@ export default function App() {
       const payload = buildRequest({ imageDataUrl, childUtterance: utterance, history: session.dialog })
       const res = await requestCocreate(payload)
 
-      // 视口正常则把 AI 内容放进当前视野；若 viewport 退化（容器未测量），回退固定逻辑画布并 zoomToFit
       const vp = editor.getViewportPageBounds()
       const ok = !!vp && vp.w > 50 && vp.h > 50
       const canvas = ok
@@ -86,9 +85,29 @@ export default function App() {
     }
   }
 
+  function setTool(name: 'draw' | 'eraser') {
+    editorRef.current?.setCurrentTool(name)
+  }
+  function undo() {
+    editorRef.current?.undo()
+  }
+  function clearCanvas() {
+    const ed = editorRef.current
+    if (!ed) return
+    const ids = [...ed.getCurrentPageShapeIds()]
+    if (ids.length) ed.deleteShapes(ids)
+  }
+
   return (
     <div className="shenbi">
       <SketchCanvas onMount={(e) => (editorRef.current = e)} />
+
+      <div className="kid-tools">
+        <button type="button" title="画笔" onClick={() => setTool('draw')}>🖌️</button>
+        <button type="button" title="橡皮" onClick={() => setTool('eraser')}>🧽</button>
+        <button type="button" title="撤销" onClick={undo}>↩️</button>
+        <button type="button" title="全部擦掉" onClick={clearCanvas}>🗑️</button>
+      </div>
 
       <div className="story-strip">
         {session.story.map((e) => (

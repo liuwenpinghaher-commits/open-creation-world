@@ -2,10 +2,17 @@ import { Tldraw, type Editor } from 'tldraw'
 import 'tldraw/tldraw.css'
 
 export function SketchCanvas({ onMount }: { onMount: (editor: Editor) => void }) {
-  // 显式 100vw/100vh + fixed，确保 tldraw 容器在挂载时就有稳定尺寸（否则 viewport 退化为 1×1）
+  // hideUi 隐藏 tldraw 成人工具栏（避免与底部说话条重叠，也更符合儿童极简定位）；
+  // onMount 默认切到画笔工具，孩子打开就能直接画。
   return (
     <div style={{ position: 'fixed', inset: 0, width: '100vw', height: '100vh' }}>
-      <Tldraw onMount={onMount} />
+      <Tldraw
+        hideUi
+        onMount={(editor) => {
+          editor.setCurrentTool('draw')
+          onMount(editor)
+        }}
+      />
     </div>
   )
 }

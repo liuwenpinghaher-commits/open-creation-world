@@ -15,12 +15,39 @@ body,
   font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
 }
 
+/* 顶部居中的儿童工具：画笔 / 橡皮 / 撤销 / 清空 */
+.kid-tools {
+  position: absolute;
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 10px;
+  z-index: 11;
+}
+
+.kid-tools button {
+  width: 54px;
+  height: 54px;
+  font-size: 26px;
+  line-height: 1;
+  border: none;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 4px 14px rgb(40 50 66 / 16%);
+  cursor: pointer;
+}
+
+.kid-tools button:active {
+  transform: scale(0.94);
+}
+
 .story-strip {
   position: absolute;
   left: 16px;
-  top: 16px;
-  max-width: 40%;
-  max-height: 60%;
+  top: 84px;
+  max-width: 38%;
+  max-height: 55%;
   overflow-y: auto;
   background: rgba(255, 255, 255, 0.88);
   border-radius: 14px;

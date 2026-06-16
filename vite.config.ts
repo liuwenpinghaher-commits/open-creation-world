@@ -10,6 +10,8 @@ export default defineConfig({
     css: true,
   },
   server: {
+    port: 3400,
+    strictPort: true,
     proxy: { '/api': 'http://127.0.0.1:8787' },
   },
 })
