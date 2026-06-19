@@ -13,6 +13,7 @@ import { applyPartner, emptySession } from './store/sessionStore'
 import { saveWork, loadWork, listWorks, deleteWork, newWorkId, getCurrentId, setCurrentId, type WorkRecord } from './store/persist'
 import { summarizeSession } from './guidance/summary'
 import { Settings } from './settings/Settings'
+import { ChildPicker } from './settings/ChildPicker'
 import { buildChildContext, moveOptsFrom } from './settings/childContext'
 import { getActiveChildId, listProfiles, getPrefs, getSafety, getPrivacy, saveStory, saveProfile, getStory, listStories } from './store/family'
 import { defaultPrefs, defaultSafety, type ChildContext, type LearningStory } from './types/settings'
@@ -338,6 +339,8 @@ export default function App() {
   return (
     <div className="shenbi">
       <SketchCanvas onMount={handleEditorMount} />
+
+      <ChildPicker onChange={() => void loadFamily()} />
 
       <div className="kid-tools">
         <button type="button" title="画笔" onClick={() => setTool('draw')}>🖌️</button>

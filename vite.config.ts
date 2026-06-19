@@ -14,4 +14,8 @@ export default defineConfig({
     strictPort: true,
     proxy: { '/api': 'http://127.0.0.1:3402' },
   },
+  // 预览(生产构建静态服务)也代理 /api，便于稳定地本地查看
+  preview: {
+    proxy: { '/api': 'http://127.0.0.1:3402' },
+  },
 })

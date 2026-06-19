@@ -64,11 +64,16 @@ async function sendTurn(page: Page, text: string) {
   await input.fill(text)
   await input.press('Enter')
 }
+// 首启会弹"谁在玩"建档引导（全屏遮罩）；测试里点"先随便玩玩"跳过
+async function dismissOnboarding(page: Page) {
+  try { await page.locator('.who-skip').click({ timeout: 3000 }) } catch { /* 无引导则跳过 */ }
+}
 
 test('创作伙伴：AI 只激发不替画，孩子指定后让"孩子自己的画"动起来', async ({ page }) => {
   await stubApi(page)
   await page.goto('/')
   await expect.poll(async () => page.evaluate(() => !!(window as unknown as { __editor?: unknown }).__editor)).toBe(true)
+  await dismissOnboarding(page)
 
   // P10 首屏空状态引导
   await expect(page.locator('.empty-hint')).toBeVisible()
@@ -120,6 +125,7 @@ test('创作伙伴：AI 只激发不替画，孩子指定后让"孩子自己的�
   // 持久化：刷新后画与对话恢复（dragon 仍在）
   await page.reload()
   await expect.poll(async () => page.evaluate(() => !!(window as unknown as { __editor?: unknown }).__editor)).toBe(true)
+  await dismissOnboarding(page)
   await expect.poll(() => shapeIds(page).then((ids) => ids.includes('shape:dragon'))).toBe(true)
 
   // 新的一张：清空 → 回到空状态
@@ -138,6 +144,7 @@ test('B1 纯画画也回应：孩子只画不说，停顿后 AI 自动发起一�
 
   await page.goto('/')
   await expect.poll(async () => page.evaluate(() => !!(window as unknown as { __editor?: unknown }).__editor)).toBe(true)
+  await dismissOnboarding(page)
 
   // 真实画一笔，但一句话都不说
   await page.mouse.move(300, 320); await page.mouse.down()
@@ -163,6 +170,7 @@ test('豪华兑现：AnimatedDrawings 可用时播放绑骨动画视频', async 
 
   await page.goto('/')
   await expect.poll(async () => page.evaluate(() => !!(window as unknown as { __editor?: unknown }).__editor)).toBe(true)
+  await dismissOnboarding(page)
   await childDraws(page, 'person', 300, 300)
 
   await sendTurn(page, '让我画的小人走起来')
@@ -181,6 +189,7 @@ test('防假兑现：画布空时要求"飞"，不谎称它动了，改引导先
 
   await page.goto('/')
   await expect.poll(async () => page.evaluate(() => !!(window as unknown as { __editor?: unknown }).__editor)).toBe(true)
+  await dismissOnboarding(page)
 
   // 不画任何东西，直接要求"飞"
   await sendTurn(page, '让它飞')
@@ -204,6 +213,7 @@ test('对象定位：选中一个，兑现只动选中的那个', async ({ page 
 
   await page.goto('/')
   await expect.poll(async () => page.evaluate(() => !!(window as unknown as { __editor?: unknown }).__editor)).toBe(true)
+  await dismissOnboarding(page)
   await childDraws(page, 'bird', 200, 300)
   await childDraws(page, 'tree', 600, 300)
   // 只选中 bird
@@ -230,6 +240,7 @@ test('家长门 + 设置：算术门通过、添加孩子、改引导偏好', as
   }))
   await page.goto('/')
   await expect.poll(async () => page.evaluate(() => !!(window as unknown as { __editor?: unknown }).__editor)).toBe(true)
+  await dismissOnboarding(page)
 
   await page.locator('.kid-tools button[title="设置（家长）"]').click()
   // 家长门：读出算术题、长按 2 秒、答对
@@ -276,6 +287,7 @@ test('成长故事：把一次创作生成强项导向的学习故事', async ({
 
   await page.goto('/')
   await expect.poll(async () => page.evaluate(() => !!(window as unknown as { __editor?: unknown }).__editor)).toBe(true)
+  await dismissOnboarding(page)
   await childDraws(page, 'd', 300, 300)
   await sendTurn(page, '你看我画的龙')
   await expect(page.locator('.heard')).toBeVisible()
@@ -316,6 +328,7 @@ test('隐私模式 + 成长报告 + 兴趣识别', async ({ page }) => {
 
   await page.goto('/')
   await expect.poll(async () => page.evaluate(() => !!(window as unknown as { __editor?: unknown }).__editor)).toBe(true)
+  await dismissOnboarding(page)
 
   // 第 1 拍：默认非隐私 → 带画面
   await stroke(280)
@@ -348,4 +361,31 @@ test('隐私模式 + 成长报告 + 兴趣识别', async ({ page }) => {
   await expect(page.locator('.settings-sec')).toContainText('学习故事')
   await expect(page.locator('.story-narrative')).toContainText('想象力真好')
   await expect(page.locator('.torrance-bars')).toBeVisible()
+})
+
+test('首启建档(E2) + 切娃(E1)：欢迎引导创建孩子，顶部可切换/新增', async ({ page }) => {
+  await page.goto('/')
+  await expect.poll(async () => page.evaluate(() => !!(window as unknown as { __editor?: unknown }).__editor)).toBe(true)
+
+  // E2 首启：弹出"谁在玩"建档引导
+  await expect(page.locator('.who-card')).toContainText('这是给谁玩的')
+  await page.locator('.who-name').fill('豆豆')
+  await page.locator('.who-go').click()
+
+  // 建档后：引导消失，顶部出现"谁在玩"小头像，显示豆豆
+  await expect(page.locator('.who-card')).toHaveCount(0)
+  await expect(page.locator('.who-chip')).toContainText('豆豆')
+
+  // E1 切娃：点头像 → 加一个 → 建第二个孩子 → 头像切到妞妞
+  await page.locator('.who-chip').click()
+  await page.locator('.who-add').click()
+  await expect(page.locator('.who-card')).toBeVisible()
+  await page.locator('.who-name').fill('妞妞')
+  await page.locator('.who-go').click()
+  await expect(page.locator('.who-chip')).toContainText('妞妞')
+
+  // 切回豆豆
+  await page.locator('.who-chip').click()
+  await page.locator('.who-list button', { hasText: '豆豆' }).click()
+  await expect(page.locator('.who-chip')).toContainText('豆豆')
 })
