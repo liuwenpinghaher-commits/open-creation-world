@@ -8,11 +8,16 @@ import { useVoice } from './voice/useVoice'
 import { requestPartner } from './cocreate/cocreateClient'
 import { buildRequest } from './cocreate/buildRequest'
 import { applyPartner, emptySession } from './store/sessionStore'
-import { saveCreation, loadCreation, clearCreation } from './store/persist'
+import { saveWork, loadWork, listWorks, deleteWork, newWorkId, getCurrentId, setCurrentId, type WorkRecord } from './store/persist'
 import { summarizeSession } from './guidance/summary'
 import type { SessionState } from './types/cocreate'
 
 type Phase = 'idle' | 'recording' | 'thinking'
+
+// 仅 dev：暴露 editor 给端到端测试驱动（放在组件外，避免在渲染作用域里改 window）
+function exposeForTest(e: Editor) {
+  if (import.meta.env.DEV) (window as unknown as { __editor?: Editor }).__editor = e
+}
 
 export default function App() {
   const editorRef = useRef<Editor | null>(null)
@@ -20,28 +25,34 @@ export default function App() {
   const [phase, setPhase] = useState<Phase>('idle')
   const [typed, setTyped] = useState('')
   const [hint, setHint] = useState('')
-  const [showReview, setShowReview] = useState(false)
+  const [journal, setJournal] = useState<WorkRecord[] | null>(null) // 非 null 即打开成长册
+  const [currentWorkId, setCurrentWorkId] = useState('') // 渲染用（ref 在事件里读，state 给渲染读）
   const { start, stop, speak } = useVoice()
 
   const sessionRef = useRef(session)
   useEffect(() => { sessionRef.current = session }, [session])
   const restoredRef = useRef(false)
   const dirtyRef = useRef(false) // 画布自上次感知后是否有改动（决定是否重新发图）
+  const workIdRef = useRef<string>('') // 当前正在画的作品 id
 
   function saveNow(s: SessionState = sessionRef.current) {
     const editor = editorRef.current
-    if (!editor) return
-    try { void saveCreation(s, editor.getSnapshot()) } catch (err) { console.warn('save failed:', err) }
+    if (!editor || !workIdRef.current) return
+    try { void saveWork(workIdRef.current, s, editor.getSnapshot()) } catch (err) { console.warn('save failed:', err) }
   }
 
   async function handleEditorMount(e: Editor) {
     editorRef.current = e
-    if (import.meta.env.DEV) (window as unknown as { __editor?: Editor }).__editor = e
+    exposeForTest(e)
 
     if (!restoredRef.current) {
       restoredRef.current = true
+      const id = getCurrentId() || newWorkId()
+      workIdRef.current = id
+      setCurrentId(id)
+      setCurrentWorkId(id)
       try {
-        const saved = await loadCreation()
+        const saved = await loadWork(id)
         if (saved) {
           if (saved.snapshot) e.loadSnapshot(saved.snapshot as never)
           setSession(saved.session)
@@ -61,16 +72,45 @@ export default function App() {
     )
   }
 
+  /** 开新的一张：另存为新作品（旧的已留在成长册里） */
   async function handleNewStory() {
     if (phase !== 'idle') return
     const editor = editorRef.current
-    await clearCreation()
+    const id = newWorkId()
+    workIdRef.current = id
+    setCurrentId(id)
+    setCurrentWorkId(id)
     setSession(emptySession())
     dirtyRef.current = false
     if (editor) {
       const ids = [...editor.getCurrentPageShapeIds()]
       if (ids.length) editor.deleteShapes(ids)
     }
+  }
+
+  async function openJournal() { setJournal(await listWorks()) }
+
+  async function openWork(id: string) {
+    const editor = editorRef.current
+    if (!editor) return
+    saveNow() // 先存好当前这张
+    const saved = await loadWork(id)
+    if (!saved) return
+    workIdRef.current = id
+    setCurrentId(id)
+    setCurrentWorkId(id)
+    const ids = [...editor.getCurrentPageShapeIds()]
+    if (ids.length) editor.deleteShapes(ids)
+    if (saved.snapshot) editor.loadSnapshot(saved.snapshot as never)
+    setSession(saved.session)
+    dirtyRef.current = false
+    setJournal(null)
+  }
+
+  async function removeWork(id: string) {
+    await deleteWork(id)
+    setJournal(await listWorks())
+    if (id === workIdRef.current) await handleNewStory()
   }
 
   function flashHint(msg: string) {
@@ -154,7 +194,6 @@ export default function App() {
 
   const micLabel = phase === 'thinking' ? '✏️ 我在听…' : phase === 'recording' ? '🔴 说完了，点我' : '🎙️ 点我说话'
   const lastPartner = [...session.dialog].reverse().find((d) => d.role === 'partner')
-  const review = summarizeSession(session)
 
   return (
     <div className="shenbi">
@@ -165,28 +204,44 @@ export default function App() {
         <button type="button" title="橡皮" onClick={() => setTool('eraser')}>🧽</button>
         <button type="button" title="撤销" onClick={undo}>↩️</button>
         <button type="button" title="新的一张" onClick={handleNewStory} disabled={phase !== 'idle'}>🆕</button>
-        <button type="button" title="成长小记（给爸爸妈妈看）" onClick={() => setShowReview(true)}>📋</button>
+        <button type="button" title="成长册（给爸爸妈妈看）" onClick={openJournal}>📖</button>
       </div>
 
-      {showReview ? (
-        <div className="review-mask" onClick={() => setShowReview(false)}>
+      {journal ? (
+        <div className="review-mask" onClick={() => setJournal(null)}>
           <div className="review-card" onClick={(e) => e.stopPropagation()}>
-            <h2>今天的成长小记</h2>
-            <p className="review-stat">孩子主动开口/动手 <b>{review.childTurns}</b> 次</p>
-            {review.byDimension.length ? (
-              <div className="review-dims">
-                {review.byDimension.map((d) => (
-                  <span key={d.dimension} className="review-dim">{d.label} ×{d.count}</span>
-                ))}
-              </div>
-            ) : null}
-            <h3>孩子说了 / 想出了什么</h3>
-            {review.produced.length ? (
-              <ul className="review-list">{review.produced.map((p, i) => <li key={i}>{p}</li>)}</ul>
+            <h2>成长册 · 共 {journal.length} 张</h2>
+            {journal.length === 0 ? (
+              <p className="review-empty">还没有作品，先和孩子一起画一画、聊一聊吧～</p>
             ) : (
-              <p className="review-empty">还没开始，先和孩子一起画一画、聊一聊吧～</p>
+              <ul className="journal-list">
+                {journal.map((w) => {
+                  const sum = summarizeSession(w.session)
+                  const day = new Date(w.updatedAt).toLocaleString('zh-CN', { month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+                  return (
+                    <li key={w.id} className={w.id === currentWorkId ? 'journal-item current' : 'journal-item'}>
+                      <div className="journal-head">
+                        <span className="journal-day">{day}{w.id === currentWorkId ? "（正在画）" : ""}</span>
+                        <span className="journal-turns">开口 {sum.childTurns} 次</span>
+                      </div>
+                      {sum.byDimension.length ? (
+                        <div className="review-dims">
+                          {sum.byDimension.map((d) => <span key={d.dimension} className="review-dim">{d.label} ×{d.count}</span>)}
+                        </div>
+                      ) : null}
+                      {sum.produced.length ? (
+                        <ul className="review-list">{sum.produced.slice(-3).map((p, i) => <li key={i}>{p}</li>)}</ul>
+                      ) : null}
+                      <div className="journal-actions">
+                        {w.id === currentWorkId ? null : <button type="button" onClick={() => openWork(w.id)}>打开</button>}
+                        <button type="button" className="journal-del" onClick={() => removeWork(w.id)}>删除</button>
+                      </div>
+                    </li>
+                  )
+                })}
+              </ul>
             )}
-            <button type="button" className="review-close" onClick={() => setShowReview(false)}>知道啦</button>
+            <button type="button" className="review-close" onClick={() => setJournal(null)}>知道啦</button>
           </div>
         </div>
       ) : null}

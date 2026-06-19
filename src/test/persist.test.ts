@@ -1,34 +1,55 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import 'fake-indexeddb/auto'
-import { saveCreation, loadCreation, clearCreation } from '../store/persist'
+import { saveWork, loadWork, listWorks, deleteWork, newWorkId } from '../store/persist'
 import { applyPartner, emptySession } from '../store/sessionStore'
 
-describe('persist（IndexedDB 自动保存/恢复）', () => {
-  beforeEach(async () => { await clearCreation() })
+function workWith(signal: string) {
+  return applyPartner(emptySession(), {
+    noticed: '', dimension: 'imagination', crowd: 'open', provoke: '问', fulfill: null, childSignal: signal,
+  }, '你看')
+}
 
-  it('空时返回 null', async () => {
-    expect(await loadCreation()).toBeNull()
+describe('persist 多作品', () => {
+  beforeEach(async () => {
+    for (const w of await listWorks()) await deleteWork(w.id)
   })
 
-  it('保存后能原样恢复 session 与画布快照', async () => {
-    const s = applyPartner(emptySession(), {
-      noticed: '一个圆圆的', dimension: 'observe_express', crowd: 'open',
-      provoke: '这是什么呀？', fulfill: null, childSignal: '画了一个圆',
-    }, '你看')
-    const snapshot = { document: { foo: 1 }, session: { bar: 2 } }
-
-    await saveCreation(s, snapshot)
-    const loaded = await loadCreation()
-    expect(loaded).not.toBeNull()
-    expect(loaded!.session.dialog.map((x) => x.role)).toEqual(['child', 'partner'])
-    expect(loaded!.session.guidance).toEqual(['observe_express'])
-    expect(loaded!.session.signals).toEqual(['画了一个圆'])
-    expect(loaded!.snapshot).toEqual(snapshot)
+  it('空时列表为空、加载不存在返回 null', async () => {
+    expect(await listWorks()).toEqual([])
+    expect(await loadWork('nope')).toBeNull()
   })
 
-  it('clear 后再读为 null', async () => {
-    await saveCreation(emptySession(), {})
-    await clearCreation()
-    expect(await loadCreation()).toBeNull()
+  it('保存多张、按最近更新降序列出、各自可加载', async () => {
+    const a = newWorkId(); const b = newWorkId()
+    await saveWork(a, workWith('画了龙'), { doc: 1 })
+    await new Promise((r) => setTimeout(r, 2))
+    await saveWork(b, workWith('画了城堡'), { doc: 2 })
+
+    const list = await listWorks()
+    expect(list.map((w) => w.id)).toEqual([b, a]) // 最近的在前
+    expect(list[0]).not.toHaveProperty('snapshot') // 列表不带快照
+
+    const loaded = await loadWork(a)
+    expect(loaded!.session.signals).toEqual(['画了龙'])
+    expect(loaded!.snapshot).toEqual({ doc: 1 })
+  })
+
+  it('再次保存同 id 更新内容并保留 createdAt', async () => {
+    const id = newWorkId()
+    await saveWork(id, workWith('一稿'), {})
+    const before = (await listWorks()).find((w) => w.id === id)!
+    await new Promise((r) => setTimeout(r, 2))
+    await saveWork(id, workWith('二稿'), {})
+    const after = (await listWorks()).find((w) => w.id === id)!
+    expect((await loadWork(id))!.session.signals).toEqual(['二稿'])
+    expect(after.createdAt).toBe(before.createdAt)
+    expect(after.updatedAt).toBeGreaterThanOrEqual(before.updatedAt)
+  })
+
+  it('删除作品', async () => {
+    const id = newWorkId()
+    await saveWork(id, emptySession(), {})
+    await deleteWork(id)
+    expect(await loadWork(id)).toBeNull()
   })
 })
