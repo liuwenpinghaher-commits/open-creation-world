@@ -3,6 +3,7 @@ import type { Editor } from 'tldraw'
 import './App.css'
 import { SketchCanvas } from './sketch/SketchCanvas'
 import { runBehavior } from './fulfill/behaviors'
+import { tryFigureAnimation } from './fulfill/figure'
 import { nextMove, readEngagement } from './guidance/engine'
 import { useVoice } from './voice/useVoice'
 import { requestPartner } from './cocreate/cocreateClient'
@@ -27,6 +28,7 @@ export default function App() {
   const [hint, setHint] = useState('')
   const [journal, setJournal] = useState<WorkRecord[] | null>(null) // 非 null 即打开成长册
   const [currentWorkId, setCurrentWorkId] = useState('') // 渲染用（ref 在事件里读，state 给渲染读）
+  const [figureVideo, setFigureVideo] = useState<string | null>(null) // 豪华兑现：AnimatedDrawings 视频
   const { start, stop, speak } = useVoice()
 
   const sessionRef = useRef(session)
@@ -149,11 +151,17 @@ export default function App() {
     const merged = applyPartner(sessionRef.current, res, utterance)
     setSession(merged)
 
-    // 偶发兑现：把孩子自己画的笔触整体动起来（仅当孩子明确要求）
+    // 偶发兑现：先试 AnimatedDrawings 绑骨动画(豪华档)，不可用则降级为轻量木偶动画——动的都是孩子自己的画
     if (res.fulfill) {
-      const ids = [...editor.getCurrentPageShapeIds()].map(String)
-      try { await runBehavior(editor, res.fulfill.behavior, ids, viewport(editor)) }
-      catch (err) { console.warn('fulfill failed:', err) }
+      const png = await exportCanvasPng()
+      const video = png ? await tryFigureAnimation(png) : null
+      if (video) {
+        setFigureVideo(video)
+      } else {
+        const ids = [...editor.getCurrentPageShapeIds()].map(String)
+        try { await runBehavior(editor, res.fulfill.behavior, ids, viewport(editor)) }
+        catch (err) { console.warn('fulfill failed:', err) }
+      }
     }
 
     const line = [res.peer?.evaluate, res.peer?.expand, res.provoke].filter(Boolean).join(' ')
@@ -243,6 +251,12 @@ export default function App() {
             )}
             <button type="button" className="review-close" onClick={() => setJournal(null)}>知道啦</button>
           </div>
+        </div>
+      ) : null}
+
+      {figureVideo ? (
+        <div className="figure-mask" onClick={() => setFigureVideo(null)}>
+          <video className="figure-video" src={figureVideo} autoPlay playsInline onEnded={() => setFigureVideo(null)} />
         </div>
       ) : null}
 

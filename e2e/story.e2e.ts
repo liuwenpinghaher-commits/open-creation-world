@@ -34,6 +34,8 @@ async function stubApi(page: Page) {
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(body) })
   })
   await page.route('**/api/tts', (route) => route.fulfill({ status: 200, contentType: 'audio/wav', body: '' }))
+  // 默认：AnimatedDrawings 未配置(501) → 兑现降级到轻量木偶动画
+  await page.route('**/api/animate-figure', (route) => route.fulfill({ status: 501, contentType: 'application/json', body: '{}' }))
 }
 
 function shapeIds(page: Page) {
@@ -116,4 +118,25 @@ test('创作伙伴：AI 只激发不替画，孩子指定后让"孩子自己的�
   await page.locator('.kid-tools button[title="新的一张"]').click()
   await expect.poll(() => shapeIds(page).then((ids) => ids.length), { timeout: 8000 }).toBe(0)
   await expect(page.locator('.partner-bubble')).toHaveCount(0)
+})
+
+test('豪华兑现：AnimatedDrawings 可用时播放绑骨动画视频', async ({ page }) => {
+  // partner 第一拍即返回 fulfill；animate-figure 返回视频 URL
+  await page.route('**/api/partner', (route) => route.fulfill({
+    status: 200, contentType: 'application/json',
+    body: JSON.stringify({ noticed: '一个人', dimension: 'imagination', crowd: 'open', provoke: '让它动起来咯！', fulfill: { behavior: 'walk', trigger: '让它走' } }),
+  }))
+  await page.route('**/api/tts', (route) => route.fulfill({ status: 200, contentType: 'audio/wav', body: '' }))
+  await page.route('**/api/animate-figure', (route) => route.fulfill({
+    status: 200, contentType: 'application/json', body: JSON.stringify({ videoUrl: 'http://example.test/anim.mp4' }),
+  }))
+
+  await page.goto('/')
+  await expect.poll(async () => page.evaluate(() => !!(window as unknown as { __editor?: unknown }).__editor)).toBe(true)
+  await childDraws(page, 'person', 300, 300)
+
+  await sendTurn(page, '让我画的小人走起来')
+  // 出现绑骨动画视频，且 src 指向上游返回的地址
+  const video = page.locator('.figure-video')
+  await expect(video).toHaveAttribute('src', 'http://example.test/anim.mp4', { timeout: 8000 })
 })

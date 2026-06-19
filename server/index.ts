@@ -34,6 +34,18 @@ app.post('/api/stt', async (req, res) => {
   }
 })
 
+// 可选：Meta AnimatedDrawings 人物绑骨动画（需自行运行其服务并设 ANIMATED_DRAWINGS_URL）。
+// 约定：上游接收 { imageDataUrl }，返回 { videoUrl }。未配置则 501，前端自动降级到轻量木偶动画。
+app.post('/api/animate-figure', async (req, res) => {
+  const url = process.env.ANIMATED_DRAWINGS_URL
+  if (!url) { res.status(501).json({ error: 'animated-drawings 未配置' }); return }
+  try {
+    const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(req.body) })
+    if (!r.ok) { fail(res, 'animate-figure', new Error(`upstream ${r.status}`)); return }
+    res.json(await r.json())
+  } catch (e) { fail(res, 'animate-figure', e) }
+})
+
 app.post('/api/tts', async (req, res) => {
   try {
     const { audio, mime } = await synthesize((req.body as { text: string }).text)
