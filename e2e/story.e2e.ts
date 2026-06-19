@@ -389,3 +389,19 @@ test('首启建档(E2) + 切娃(E1)：欢迎引导创建孩子，顶部可切换
   await page.locator('.who-list button', { hasText: '豆豆' }).click()
   await expect(page.locator('.who-chip')).toContainText('豆豆')
 })
+
+test('S2 服务诊断：AI 连不上时出现提示条，点击进设置', async ({ page }) => {
+  await page.route('**/api/partner', (route) => route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ error: '服务暂时不可用' }) }))
+  await page.route('**/api/tts', (route) => route.fulfill({ status: 200, contentType: 'audio/wav', body: '' }))
+
+  await page.goto('/')
+  await expect.poll(async () => page.evaluate(() => !!(window as unknown as { __editor?: unknown }).__editor)).toBe(true)
+  await dismissOnboarding(page)
+
+  await sendTurn(page, '你好')
+  // 连不上 → 出现诊断条
+  await expect(page.locator('.svc-error')).toBeVisible()
+  // 点击 → 进入设置（家长门）
+  await page.locator('.svc-error').click()
+  await expect(page.locator('.gate-card, .settings-full')).toBeVisible()
+})

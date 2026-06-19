@@ -44,6 +44,7 @@ export default function App() {
   const [speaking, setSpeaking] = useState(false) // TTS 播放中（全语音模式的可视反馈）
   const [lastSpoken, setLastSpoken] = useState('') // 最近一句 AI 的话，供"再听一次"
   const [fallbackText, setFallbackText] = useState('') // A5：TTS 失败时临时显示文字兜底
+  const [serviceError, setServiceError] = useState(false) // S2：AI 服务连不上（给家长的诊断）
   const { start, stop, speak } = useVoice()
 
   const phaseRef = useRef(phase) // 给 store.listen 等闭包读最新 phase
@@ -268,7 +269,14 @@ export default function App() {
     // 节奏自适应：结合孩子这句 + 是否在画，判断卡住/投入，决定降难度+加支架
     const childUtts = sessionRef.current.dialog.filter((d) => d.role === 'child').map((d) => d.text)
     const move = nextMove(sessionRef.current.guidance, readEngagement([...childUtts, utterance], drew), moveOptsRef.current)
-    const res = await requestPartner(buildRequest({ imageDataUrl, childUtterance: utterance, history: sessionRef.current.dialog, move, hasDrawing: shapeCount > 0, childContext: childCtxRef.current, sceneNote: sceneNoteOf(sessionRef.current) }))
+    let res
+    try {
+      res = await requestPartner(buildRequest({ imageDataUrl, childUtterance: utterance, history: sessionRef.current.dialog, move, hasDrawing: shapeCount > 0, childContext: childCtxRef.current, sceneNote: sceneNoteOf(sessionRef.current) }))
+      setServiceError(false) // S2：连上了就清除告警
+    } catch (e) {
+      setServiceError(true) // S2：AI 服务连不上 → 给家长一个清楚的入口
+      throw e
+    }
 
     // 防"假兑现"：要求兑现但画布空 → 不动画、改说引导先画。说什么就存什么（说=气泡=成长册）
     const decision = fulfillDecision(res, shapeCount)
@@ -350,6 +358,12 @@ export default function App() {
 
       {showSettings ? (
         <Settings onClose={() => setShowSettings(false)} onChanged={() => void loadFamily()} />
+      ) : null}
+
+      {serviceError ? (
+        <button type="button" className="svc-error" onClick={() => { setServiceError(false); setShowSettings(true) }}>
+          ⚠️ AI 暂时连不上——点我去「设置·系统」检查密钥/网络
+        </button>
       ) : null}
 
       {journal ? (

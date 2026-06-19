@@ -210,6 +210,24 @@ body,
   background: #fff;
 }
 
+/* S2：AI 连不上诊断条（给家长） */
+.svc-error {
+  position: absolute;
+  bottom: 92px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 14;
+  border: none;
+  border-radius: 999px;
+  background: #fdeaea;
+  color: #a23a3a;
+  font-size: 14px;
+  font-weight: 600;
+  padding: 10px 18px;
+  box-shadow: 0 4px 14px rgb(160 60 60 / 22%);
+  cursor: pointer;
+}
+
 /* 谁在玩 · 建档引导 + 切娃 */
 .who-mask {
   position: fixed; inset: 0; z-index: 35;
