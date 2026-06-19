@@ -151,21 +151,26 @@ export default function App() {
     const merged = applyPartner(sessionRef.current, res, utterance)
     setSession(merged)
 
+    const line = [res.peer?.evaluate, res.peer?.expand, res.provoke].filter(Boolean).join(' ')
+
     // 偶发兑现：先试 AnimatedDrawings 绑骨动画(豪华档)，不可用则降级为轻量木偶动画——动的都是孩子自己的画
     if (res.fulfill) {
       const png = await exportCanvasPng()
       const video = png ? await tryFigureAnimation(png) : null
       if (video) {
         setFigureVideo(video)
+        await speak(line)
       } else {
         const ids = [...editor.getCurrentPageShapeIds()].map(String)
-        try { await runBehavior(editor, res.fulfill.behavior, ids, viewport(editor)) }
-        catch (err) { console.warn('fulfill failed:', err) }
+        // 讲述与木偶动画并行，省掉一段串行等待
+        await Promise.all([
+          runBehavior(editor, res.fulfill.behavior, ids, viewport(editor)).catch((err) => console.warn('fulfill failed:', err)),
+          speak(line),
+        ])
       }
+    } else {
+      await speak(line)
     }
-
-    const line = [res.peer?.evaluate, res.peer?.expand, res.provoke].filter(Boolean).join(' ')
-    await speak(line)
     saveNow(merged)
   }
 
