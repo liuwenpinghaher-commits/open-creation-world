@@ -3,7 +3,7 @@ import type { Editor } from 'tldraw'
 import './App.css'
 import { SketchCanvas } from './sketch/SketchCanvas'
 import { runBehavior } from './fulfill/behaviors'
-import { nextMove } from './guidance/engine'
+import { nextMove, readEngagement } from './guidance/engine'
 import { useVoice } from './voice/useVoice'
 import { requestPartner } from './cocreate/cocreateClient'
 import { buildRequest } from './cocreate/buildRequest'
@@ -101,7 +101,9 @@ export default function App() {
     const imageDataUrl = dirtyRef.current ? await exportCanvasPng() : undefined
     if (imageDataUrl) dirtyRef.current = false
 
-    const move = nextMove(sessionRef.current.guidance)
+    // 节奏自适应：结合孩子刚说的这句，判断是否卡住，决定降难度+加支架
+    const childUtts = sessionRef.current.dialog.filter((d) => d.role === 'child').map((d) => d.text)
+    const move = nextMove(sessionRef.current.guidance, readEngagement([...childUtts, utterance]))
     const res = await requestPartner(buildRequest({ imageDataUrl, childUtterance: utterance, history: sessionRef.current.dialog, move }))
 
     const merged = applyPartner(sessionRef.current, res, utterance)

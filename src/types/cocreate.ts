@@ -20,8 +20,8 @@ export type CrowdType =
 /** 兑现层行为词表：作用于孩子真实笔触的整体表演（本地几何，无 AI 坐标） */
 export type Behavior = 'fly' | 'grow' | 'spin' | 'hop' | 'walk' | 'bounce' | 'wobble'
 
-/** 引导引擎为本拍选定的目标（本地决定，保证轮换均衡可测） */
-export type GuidanceMove = { dimension: GuidanceDimension; crowd: CrowdType }
+/** 引导引擎为本拍选定的目标（本地决定，保证轮换均衡可测）。support 高＝孩子卡住，需更强支架 */
+export type GuidanceMove = { dimension: GuidanceDimension; crowd: CrowdType; support?: 'high' | 'normal' }
 
 /** LLM 一拍输出契约：无坐标、不替孩子命名/写故事；fulfill 仅当孩子明确指定动作 */
 export type PartnerResponse = {

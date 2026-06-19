@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { nextDimension, nextMove } from '../guidance/engine'
+import { nextDimension, nextMove, readEngagement } from '../guidance/engine'
 import type { GuidanceDimension } from '../types/cocreate'
 
 describe('引导引擎：维度均衡轮换', () => {
@@ -33,5 +33,32 @@ describe('引导引擎：维度均衡轮换', () => {
     expect(nextMove([]).crowd).toBe('open')
     // 一轮过后再次轮到 observe_express（第 1 次）→ 偏好列表第 1 项 'wh'
     expect(nextMove(['observe_express', 'narrative_logic', 'imagination', 'problem_solving']).crowd).toBe('wh')
+  })
+
+  it('正常时 support 为 normal', () => {
+    expect(nextMove([]).support).toBe('normal')
+  })
+})
+
+describe('引导引擎：节奏自适应', () => {
+  it('readEngagement 识别卡住/投入/一般', () => {
+    expect(readEngagement([])).toBe('normal')
+    expect(readEngagement(['不知道'])).toBe('stuck')
+    expect(readEngagement(['嗯'])).toBe('stuck')
+    expect(readEngagement([''])).toBe('stuck')
+    expect(readEngagement(['它', '好'])).toBe('stuck') // 连续两次极短
+    expect(readEngagement(['它住在彩虹上面，每天都能看到漂亮的颜色'])).toBe('flowing')
+    expect(readEngagement(['一只红色的龙'])).toBe('normal')
+  })
+
+  it('卡住时降到最具体维度 + 具体 Wh 提问 + 高支架', () => {
+    const m = nextMove(['imagination', 'problem_solving'], 'stuck')
+    expect(m.dimension).toBe('observe_express') // 最容易、最具体
+    expect(m.crowd).toBe('wh')
+    expect(m.support).toBe('high')
+  })
+
+  it('卡住但刚用过观察维度，则换下一个最容易的，避免立即重复', () => {
+    expect(nextMove(['observe_express'], 'stuck').dimension).toBe('narrative_logic')
   })
 })
