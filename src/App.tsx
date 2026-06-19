@@ -39,7 +39,19 @@ export default function App() {
   const [expandedWork, setExpandedWork] = useState<string | null>(null) // 成长册里展开看对话的作品
   const [showSettings, setShowSettings] = useState(false)
   const [stories, setStories] = useState<Record<string, { narrative: string; highlights: string[] }>>({})
+  const [speaking, setSpeaking] = useState(false) // TTS 播放中（全语音模式的可视反馈）
+  const [lastSpoken, setLastSpoken] = useState('') // 最近一句 AI 的话，供"再听一次"
   const { start, stop, speak } = useVoice()
+
+  /** 全语音：说出 AI 的话 + 维护说话指示与"再听一次"；没出声则提示 */
+  async function speakLine(text: string): Promise<void> {
+    if (!text) return
+    setLastSpoken(text)
+    setSpeaking(true)
+    const ok = await speak(text)
+    setSpeaking(false)
+    if (!ok) flashHint('没听到的话，点 🔊 再听一次～')
+  }
 
   // 个性化：活跃孩子的 childContext 与引导权重（refs 供 runTurn 读，避免闭包过期）
   const childCtxRef = useRef<ChildContext | undefined>(undefined)
@@ -197,7 +209,8 @@ export default function App() {
     if (!editor) return undefined
     const ids = editor.getCurrentPageShapeIds()
     if (ids.size === 0) return undefined // 空画布不发图，仅凭语音
-    const { url } = await editor.toImageDataUrl([...ids], { format: 'png', background: true })
+    // 放大 + 留白，让 VLM 更看得清孩子的细笔触简笔画（识别准确度优化）
+    const { url } = await editor.toImageDataUrl([...ids], { format: 'png', background: true, scale: 2, padding: 40 })
     return url
   }
 
@@ -228,7 +241,7 @@ export default function App() {
       const video = png ? await tryFigureAnimation(png) : null
       if (video) {
         setFigureVideo(video)
-        await speak(decision.line)
+        await speakLine(decision.line)
       } else {
         // P1：优先只动孩子选中的对象；没选则整张画。P5：兑现期间挂起自动保存。
         const sel = [...editor.getSelectedShapeIds()].map(String)
@@ -236,13 +249,13 @@ export default function App() {
         suppressSaveRef.current = true
         await Promise.all([
           runBehavior(editor, decision.behavior, ids, viewport(editor)).catch((err) => console.warn('fulfill failed:', err)),
-          speak(decision.line),
+          speakLine(decision.line),
         ])
         suppressSaveRef.current = false
         dirtyRef.current = false // 兑现只是表演（已归位），不算孩子改了画，下一拍不必重发图
       }
     } else {
-      await speak(decision.line)
+      await speakLine(decision.line)
     }
     saveNow(merged)
   }
@@ -279,7 +292,6 @@ export default function App() {
   function undo() { editorRef.current?.undo() }
 
   const micLabel = phase === 'thinking' ? '✏️ 我在听…' : phase === 'recording' ? '🔴 说完了，点我' : '🎙️ 点我说话'
-  const lastPartner = [...session.dialog].reverse().find((d) => d.role === 'partner')
 
   return (
     <div className="shenbi">
@@ -379,12 +391,18 @@ export default function App() {
         <div className="empty-hint">在纸上画点什么，或者点下面的按钮和我说说话吧～</div>
       ) : null}
 
-      {lastPartner ? <div className="partner-bubble">{lastPartner.text}</div> : null}
+      {/* 全语音：不显示 AI 文字，只用动效反馈 */}
       {phase === 'thinking' ? <div className="thinking-overlay">✨ 我在想…</div> : null}
+      {speaking ? <div className="speaking-overlay">🔊 说话中…</div> : null}
 
       <div className="talk-bar">
         {heard ? <span className="heard">我听到你说：{heard}</span> : null}
         {hint ? <span className="hint">{hint}</span> : null}
+        <button
+          type="button" className="replay-voice" title="再听一次"
+          onClick={() => void speakLine(lastSpoken)}
+          disabled={phase === 'thinking' || speaking || !lastSpoken}
+        >🔊</button>
         <button className="talk-btn" type="button" onClick={handleMic} disabled={phase === 'thinking'}>
           {micLabel}
         </button>

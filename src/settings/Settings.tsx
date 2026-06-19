@@ -7,8 +7,12 @@ import {
   getPrefs, savePrefs, getSafety, saveSafety, getActiveChildId, setActiveChildId, getGate,
   getPrivacy, setPrivacy, listStories, setFamilyNote,
 } from '../store/family'
+import { listWorks } from '../store/persist'
 import { aggregateStories, type ChildReport } from '../guidance/report'
-import type { LearningStory } from '../types/settings'
+import type { GuidancePrefs as _GP, LearningStory } from '../types/settings'
+
+const PACE_CN: Record<_GP['pace'], string> = { often: '每拍都引导', balanced: '均衡', spacious: '多留白' }
+const CREA_CN: Record<_GP['creativityFocus'], string> = { diverge: '发散', deepen: '深耕' }
 
 const DIMS: { key: GuidanceDimension; label: string }[] = [
   { key: 'observe_express', label: '观察表达' },
@@ -81,10 +85,11 @@ type MaskedConfig = {
 
 export function Settings({ onClose, onChanged }: { onClose: () => void; onChanged: () => void }) {
   const [unlocked, setUnlocked] = useState(false)
-  const [tab, setTab] = useState<'system' | 'child' | 'guide' | 'safety' | 'report'>('child')
+  const [tab, setTab] = useState<'overview' | 'system' | 'child' | 'guide' | 'safety' | 'report'>('overview')
   const [privacy, setPrivacyState] = useState(false)
   const [stories, setStories] = useState<LearningStory[]>([])
   const [report, setReport] = useState<ChildReport | null>(null)
+  const [overview, setOverview] = useState<{ works: number; stories: number; thisWeek: number; recent?: string } | null>(null)
 
   const [config, setConfig] = useState<MaskedConfig | null>(null)
   const [modelKey, setModelKey] = useState('')
@@ -109,13 +114,16 @@ export function Settings({ onClose, onChanged }: { onClose: () => void; onChange
     })()
   }, [unlocked])
 
-  // 报告页：加载活跃孩子的学习故事并聚合
+  // 报告/总览：加载活跃孩子的学习故事并聚合
   useEffect(() => {
-    if (!unlocked || tab !== 'report') return
+    if (!unlocked || (tab !== 'report' && tab !== 'overview')) return
     void (async () => {
       const ss = await listStories(activeId ?? undefined)
       setStories(ss)
       setReport(aggregateStories(ss, nowMs()))
+      const works = (await listWorks()).filter((w) => !activeId || w.childId === activeId)
+      const r = aggregateStories(ss, nowMs())
+      setOverview({ works: works.length, stories: ss.length, thisWeek: r.thisWeek, recent: ss[0]?.narrative })
     })()
   }, [unlocked, tab, activeId])
 
@@ -164,16 +172,43 @@ export function Settings({ onClose, onChanged }: { onClose: () => void; onChange
     catch { setTestMsg('连接失败') }
   }
 
+  const NAV: { k: typeof tab; label: string; icon: string }[] = [
+    { k: 'overview', label: '总览', icon: '🏠' }, { k: 'child', label: '孩子', icon: '🧒' }, { k: 'guide', label: '引导', icon: '🧭' },
+    { k: 'report', label: '成长报告', icon: '📈' }, { k: 'safety', label: '内容安全', icon: '🛡️' }, { k: 'system', label: '系统', icon: '⚙️' },
+  ]
   return (
-    <div className="review-mask" onClick={onClose}>
-      <div className="review-card settings-card" onClick={(e) => e.stopPropagation()}>
-        <div className="settings-tabs">
-          <button className={tab === 'child' ? 'on' : ''} onClick={() => setTab('child')}>孩子</button>
-          <button className={tab === 'guide' ? 'on' : ''} onClick={() => setTab('guide')}>引导</button>
-          <button className={tab === 'report' ? 'on' : ''} onClick={() => setTab('report')}>报告</button>
-          <button className={tab === 'safety' ? 'on' : ''} onClick={() => setTab('safety')}>安全</button>
-          <button className={tab === 'system' ? 'on' : ''} onClick={() => setTab('system')}>系统</button>
-        </div>
+    <div className="settings-full">
+      <aside className="settings-nav">
+        <div className="settings-nav-title">设置 · 家长</div>
+        {NAV.map((n) => (
+          <button key={n.k} className={tab === n.k ? 'on' : ''} onClick={() => setTab(n.k)}><span>{n.icon}</span>{n.label}</button>
+        ))}
+        <button className="settings-back" onClick={onClose}>← 返回创作</button>
+      </aside>
+      <main className="settings-body">
+        {tab === 'overview' ? (
+          <div className="settings-sec">
+            <h3>总览{active ? `（${active.name}）` : ''}</h3>
+            {active ? (
+              <div className="ov-childcard">
+                <span className="ov-emoji">{active.emoji}</span>
+                <div><b>{active.name}</b> · {active.age}岁
+                  {active.interests.length ? <div className="ov-interests">{active.interests.map((i) => <span key={i} className="review-dim">{i}</span>)}</div> : null}
+                </div>
+              </div>
+            ) : <p className="review-empty">先到「孩子」页添加一个孩子吧～</p>}
+            {overview ? (
+              <div className="ov-stats">
+                <div className="ov-stat"><b>{overview.works}</b><span>幅创作</span></div>
+                <div className="ov-stat"><b>{overview.stories}</b><span>学习故事</span></div>
+                <div className="ov-stat"><b>{overview.thisWeek}</b><span>本周</span></div>
+              </div>
+            ) : null}
+            {overview?.recent ? (<><h3>最近一篇学习故事</h3><div className="learning-story"><p className="story-narrative">{overview.recent}</p></div></>) : null}
+            <h3>当前引导偏好</h3>
+            <p className="review-empty">侧重{CREA_CN[prefs.creativityFocus]} · {PACE_CN[prefs.pace]} · 口吻{prefs.tone === 'lively' ? '活泼' : '温和'}{prefs.interestDriven ? ' · 从兴趣切入' : ''}</p>
+          </div>
+        ) : null}
 
         {tab === 'child' ? (
           <div className="settings-sec">
@@ -285,9 +320,7 @@ export function Settings({ onClose, onChanged }: { onClose: () => void; onChange
             ) : <p className="review-empty">读取配置中…（后端未连接时无法配置）</p>}
           </div>
         ) : null}
-
-        <button type="button" className="review-close" onClick={onClose}>完成</button>
-      </div>
+      </main>
     </div>
   )
 }

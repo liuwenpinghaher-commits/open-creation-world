@@ -75,17 +75,15 @@ test('创作伙伴：AI 只激发不替画，孩子指定后让"孩子自己的�
   await childDraws(page, 'dragon', 300, 300)
   expect(await shapeIds(page)).toEqual(['shape:dragon'])
 
-  // 第 1 拍：AI 不命名、只问——气泡出现激发；AI 没有往画布加任何东西
+  // 第 1 拍：AI 不命名、只问（全语音，AI 文字不在主屏）；AI 没有往画布加任何东西
   await sendTurn(page, '你看我画的')
-  await expect(page.locator('.partner-bubble')).toContainText('这是什么')
   await expect(page.locator('.heard')).toContainText('我听到你说：你看我画的') // P4 语音回显
   await expect(page.locator('.empty-hint')).toHaveCount(0) // 开聊后空状态消失
   expect(await shapeIds(page)).toEqual(['shape:dragon']) // AI 没作画
 
-  // 第 2 拍：孩子命名+扩展，AI 用 PEER 肯定+扩展+追问因果
+  // 第 2 拍：孩子命名+扩展
   await sendTurn(page, '它叫小火，是一只龙')
-  await expect(page.locator('.partner-bubble')).toContainText('住在什么地方')
-  await expect(page.locator('.partner-bubble')).toContainText('小火') // peer.evaluate 出现
+  await expect(page.locator('.heard')).toContainText('它叫小火')
   expect(await shapeIds(page)).toEqual(['shape:dragon'])
 
   // 第 3 拍：孩子明确要"飞" → 兑现：孩子自己画的 dragon 真的动起来（x 显著变化），且仍没有 AI 新增形状
@@ -95,7 +93,6 @@ test('创作伙伴：AI 只激发不替画，孩子指定后让"孩子自己的�
     const x = await shapeX(page, 'shape:dragon')
     return xBefore != null && x != null && Math.abs(x - xBefore) > 50
   }, { timeout: 8000 }).toBe(true)
-  await expect(page.locator('.partner-bubble')).toContainText('飞起来')
   expect(await shapeIds(page)).toEqual(['shape:dragon']) // 兑现动的是孩子的画，不是 AI 新画的
 
   // 兑现是非破坏性的：演完 dragon 回到原位附近
@@ -113,20 +110,20 @@ test('创作伙伴：AI 只激发不替画，孩子指定后让"孩子自己的�
   // P3 故事回放：展开看这次的对话
   await page.locator('.journal-item.current button', { hasText: '看这次聊了什么' }).click()
   await expect(page.locator('.journal-dialog')).toContainText('它叫小火')
-  await expect(page.locator('.journal-dialog')).toContainText('伙伴')
+  await expect(page.locator('.journal-dialog')).toContainText('这是什么') // AI 激发文字存在对话里（主屏全语音）
+  await expect(page.locator('.journal-dialog')).toContainText('飞起来')
   await page.locator('.review-close').click()
   await expect(page.locator('.review-card')).toHaveCount(0)
 
-  // 持久化：刷新后对话恢复（上一句激发仍在）
+  // 持久化：刷新后画与对话恢复（dragon 仍在）
   await page.reload()
   await expect.poll(async () => page.evaluate(() => !!(window as unknown as { __editor?: unknown }).__editor)).toBe(true)
-  await expect(page.locator('.partner-bubble')).toContainText('飞起来')
   await expect.poll(() => shapeIds(page).then((ids) => ids.includes('shape:dragon'))).toBe(true)
 
-  // 新的一张：清空
+  // 新的一张：清空 → 回到空状态
   await page.locator('.kid-tools button[title="新的一张"]').click()
   await expect.poll(() => shapeIds(page).then((ids) => ids.length), { timeout: 8000 }).toBe(0)
-  await expect(page.locator('.partner-bubble')).toHaveCount(0)
+  await expect(page.locator('.empty-hint')).toBeVisible()
 })
 
 test('豪华兑现：AnimatedDrawings 可用时播放绑骨动画视频', async ({ page }) => {
@@ -163,10 +160,14 @@ test('防假兑现：画布空时要求"飞"，不谎称它动了，改引导先
 
   // 不画任何东西，直接要求"飞"
   await sendTurn(page, '让它飞')
-  // 画布仍然空；气泡说的是"先画"，不是模型的"看它飞起来啦"
+  await expect(page.locator('.heard')).toContainText('让它飞')
+  await expect(page.locator('.talk-btn')).toBeEnabled() // 等这一拍处理完
+  // 画布仍然空（没假装动）；AI 实际说的是"先画"，不是模型原话"看它飞起来啦"——查对话记录
   expect(await shapeIds(page)).toEqual([])
-  await expect(page.locator('.partner-bubble')).toContainText('先在纸上画')
-  await expect(page.locator('.partner-bubble')).not.toContainText('飞起来啦')
+  await page.locator('.kid-tools button[title="成长册（给爸爸妈妈看）"]').click()
+  await page.locator('.journal-item.current button', { hasText: '看这次聊了什么' }).click()
+  await expect(page.locator('.journal-dialog')).toContainText('先在纸上画')
+  await expect(page.locator('.journal-dialog')).not.toContainText('飞起来啦')
 })
 
 test('对象定位：选中一个，兑现只动选中的那个', async ({ page }) => {
@@ -215,20 +216,21 @@ test('家长门 + 设置：算术门通过、添加孩子、改引导偏好', as
   await page.locator('.gate-input').fill(String(a + b))
   await page.locator('.gate-card .review-close').click()
 
-  // 进入设置（孩子页）→ 添加孩子
-  await expect(page.locator('.settings-card')).toBeVisible()
+  // 进入设置 → 默认总览页 → 切到孩子页添加孩子
+  await expect(page.locator('.settings-full')).toBeVisible()
+  await page.locator('.settings-nav button', { hasText: '孩子' }).click()
   await page.locator('.profile.add').click()
   await expect(page.locator('.profile-edit')).toBeVisible()
 
   // 切到引导页 → 把"想办法"设为重点（按钮变 on）
-  await page.locator('.settings-tabs button', { hasText: '引导' }).click()
+  await page.locator('.settings-nav button', { hasText: '引导' }).click()
   await expect(page.locator('.settings-sec h3')).toContainText('引导偏好')
   const focusBtn = page.locator('.settings-sec .emoji-pick button', { hasText: '想办法' })
   await focusBtn.click()
   await expect(focusBtn).toHaveClass(/on/)
 
   // 系统页能看到掩码密钥（placeholder 里）
-  await page.locator('.settings-tabs button', { hasText: '系统' }).click()
+  await page.locator('.settings-nav button', { hasText: '系统' }).click()
   await expect(page.locator('input[placeholder*="1234"]')).toBeVisible()
 })
 
@@ -247,7 +249,8 @@ test('成长故事：把一次创作生成强项导向的学习故事', async ({
   await expect.poll(async () => page.evaluate(() => !!(window as unknown as { __editor?: unknown }).__editor)).toBe(true)
   await childDraws(page, 'd', 300, 300)
   await sendTurn(page, '你看我画的龙')
-  await expect(page.locator('.partner-bubble')).toBeVisible()
+  await expect(page.locator('.heard')).toBeVisible()
+  await expect(page.locator('.talk-btn')).toBeEnabled() // 等这一拍处理完（已存库）再开成长册
 
   await page.locator('.kid-tools button[title="成长册（给爸爸妈妈看）"]').click()
   await page.locator('.journal-item.current button', { hasText: '生成学习故事' }).click()
@@ -263,13 +266,13 @@ async function passGate(page: Page) {
   await page.waitForTimeout(2200)
   await page.locator('.gate-input').fill(String(a + b))
   await page.locator('.gate-card .review-close').click()
-  await expect(page.locator('.settings-card')).toBeVisible()
+  await expect(page.locator('.settings-full')).toBeVisible()
 }
 
 test('隐私模式 + 成长报告 + 兴趣识别', async ({ page }) => {
-  const reqs: { imageDataUrl?: string }[] = []
+  const reqs: string[] = [] // 原始 body 字符串（大 body 用 postDataJSON 会失败）
   await page.route('**/api/partner', async (route) => {
-    reqs.push(route.request().postDataJSON())
+    reqs.push(route.request().postData() ?? '')
     await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ noticed: '', dimension: 'imagination', crowd: 'open', provoke: '它叫什么呀？', fulfill: null, childSignal: '画了恐龙' }) })
   })
   await page.route('**/api/tts', (route) => route.fulfill({ status: 200, contentType: 'audio/wav', body: '' }))
@@ -288,29 +291,31 @@ test('隐私模式 + 成长报告 + 兴趣识别', async ({ page }) => {
   // 第 1 拍：默认非隐私 → 带画面
   await stroke(280)
   await sendTurn(page, '你看我的恐龙')
-  await expect(page.locator('.partner-bubble')).toBeVisible()
-  expect(String(reqs[0]?.imageDataUrl).slice(0, 11), `reqs[0]=${JSON.stringify(Object.keys(reqs[0] ?? {}))}`).toBe('data:image/')
+  await expect(page.locator('.heard')).toBeVisible()
+  await expect.poll(() => reqs.length).toBeGreaterThan(0)
+  expect(reqs[0].includes('data:image')).toBe(true) // 非隐私：带画面
 
   // 开隐私模式
   await passGate(page)
-  await page.locator('.settings-tabs button', { hasText: '安全' }).click()
+  await page.locator('.settings-nav button', { hasText: '安全' }).click()
   await page.locator('.settings-sec label.chk', { hasText: '隐私模式' }).locator('input').check()
-  await page.locator('.settings-card .review-close').click()
+  await page.locator('.settings-back').click()
 
   // 第 2 拍：隐私模式 → 不带画面（即使又画了）
   await stroke(520)
   await sendTurn(page, '它在飞')
   await expect.poll(() => reqs.length).toBeGreaterThan(1)
-  expect(reqs[1].imageDataUrl).toBeUndefined()
+  expect(reqs[1].includes('data:image')).toBe(false) // 隐私：不带画面
 
   // 生成学习故事 → 报告页能看到叙事与 Torrance 趋势
+  await expect(page.locator('.talk-btn')).toBeEnabled() // 等这一拍处理完
   await page.locator('.kid-tools button[title="成长册（给爸爸妈妈看）"]').click()
   await page.locator('.journal-item.current button', { hasText: '生成学习故事' }).click()
   await expect(page.locator('.learning-story')).toBeVisible()
   await page.locator('.review-close').click()
 
   await passGate(page)
-  await page.locator('.settings-tabs button', { hasText: '报告' }).click()
+  await page.locator('.settings-nav button', { hasText: '报告' }).click()
   await expect(page.locator('.settings-sec')).toContainText('学习故事')
   await expect(page.locator('.story-narrative')).toContainText('想象力真好')
   await expect(page.locator('.torrance-bars')).toBeVisible()

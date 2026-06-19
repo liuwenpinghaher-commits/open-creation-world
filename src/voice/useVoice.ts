@@ -37,17 +37,17 @@ export function useVoice() {
     return text ?? ''
   }, [])
 
-  const speak = useCallback(async (text: string) => {
-    if (!text) return
-    const resp = await fetch('/api/tts', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text }),
-    })
-    if (!resp.ok) return
+  /** 返回是否真的出声了（全语音模式下，调用方据此兜底提示） */
+  const speak = useCallback(async (text: string): Promise<boolean> => {
+    if (!text) return false
+    let resp: Response
+    try {
+      resp = await fetch('/api/tts', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text }) })
+    } catch { return false }
+    if (!resp.ok) return false
     const buf = await resp.arrayBuffer()
-    if (buf.byteLength === 0) return // TTS 无输出时跳过
-    // 停掉并释放上一段，避免多段旁白叠播 + objectURL 泄漏
+    if (buf.byteLength === 0) return false // TTS 无输出
+    // 停掉并释放上一段，避免多段叠播 + objectURL 泄漏
     if (current.current) {
       current.current.audio.pause()
       URL.revokeObjectURL(current.current.url)
@@ -56,7 +56,7 @@ export function useVoice() {
     const url = URL.createObjectURL(new Blob([buf], { type }))
     const audio = new Audio(url)
     current.current = { audio, url }
-    await audio.play()
+    try { await audio.play(); return true } catch { return false }
   }, [])
 
   return { recording, start, stop, speak }
