@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import 'fake-indexeddb/auto'
 import { saveCreation, loadCreation, clearCreation } from '../store/persist'
-import { applyResponse, emptySession } from '../store/sessionStore'
+import { applyPartner, emptySession } from '../store/sessionStore'
 
 describe('persist（IndexedDB 自动保存/恢复）', () => {
   beforeEach(async () => { await clearCreation() })
@@ -11,20 +11,18 @@ describe('persist（IndexedDB 自动保存/恢复）', () => {
   })
 
   it('保存后能原样恢复 session 与画布快照', async () => {
-    const s = applyResponse(emptySession(), {
-      understanding: '小猫', speak: '画好啦',
-      addShapes: [{ id: 'cat', kind: 'ellipse', x: 0.3, y: 0.4 }],
-      story: { append: '从前有只猫。' },
-      scenes: { append: [{ id: 's1', actions: [{ shapeId: 'cat', do: 'wobble' }] }] },
-    }, '画只猫')
+    const s = applyPartner(emptySession(), {
+      noticed: '一个圆圆的', dimension: 'observe_express', crowd: 'open',
+      provoke: '这是什么呀？', fulfill: null, childSignal: '画了一个圆',
+    }, '你看')
     const snapshot = { document: { foo: 1 }, session: { bar: 2 } }
 
     await saveCreation(s, snapshot)
     const loaded = await loadCreation()
     expect(loaded).not.toBeNull()
-    expect(loaded!.session.shapes.map((x) => x.id)).toEqual(['cat'])
-    expect(loaded!.session.story[0].text).toBe('从前有只猫。')
-    expect(loaded!.session.scenes[0].id).toBe('s1')
+    expect(loaded!.session.dialog.map((x) => x.role)).toEqual(['child', 'partner'])
+    expect(loaded!.session.guidance).toEqual(['observe_express'])
+    expect(loaded!.session.signals).toEqual(['画了一个圆'])
     expect(loaded!.snapshot).toEqual(snapshot)
   })
 

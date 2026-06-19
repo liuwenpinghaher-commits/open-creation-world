@@ -1,79 +1,50 @@
 // src/types/cocreate.ts
+// 创作伙伴模型：AI 用对话式引导(PEER/CROWD)激发孩子自己创作；不替孩子画/写/命名。
+// 动画只作"孩子明确指定后的偶发兑现"，作用在孩子真实笔触上（见 fulfill/behaviors）。
 
-/** 一个简笔画图形原语（限定有限集合，保证 AI 产出可控、可手绘化） */
-export type SketchShapeSpec = {
-  id: string
-  kind: 'draw' | 'ellipse' | 'rectangle' | 'line' | 'arrow' | 'text'
-  /** 归一化坐标，0..1，渲染时映射到画布尺寸 */
-  x: number
-  y: number
-  w?: number
-  h?: number
-  points?: { x: number; y: number }[] // draw/line 用
-  text?: string
-  color?: string
-  label?: string
-}
-
-export type ShapePatch = {
-  id: string
-  remove?: boolean
-  x?: number
-  y?: number
-  color?: string
-  text?: string
-}
-
-/** 一个角色在一个分镜里的演出动作（声明式，由 AI 产出）。坐标归一化 0..1。 */
-export type ActorAction = {
-  shapeId: string // 必须引用画布上已存在的简笔画 id
-  do: 'enter' | 'disappear' | 'moveTo' | 'scaleTo' | 'rotateTo' | 'wobble'
-  x?: number
-  y?: number
-  path?: { x: number; y: number }[] // moveTo 可走弧线/路径（缺省走直线）
-  scale?: number // scaleTo 目标缩放（相对当前尺寸）
-  rotation?: number // rotateTo 目标角度（度）
-  ease?: 'linear' | 'easeOut' | 'easeInOut' | 'bounce'
-  durationMs?: number
-}
-
-/** 一个分镜：一句旁白 + 镜内全部动作并行演出 + 演完停顿 */
-export type Scene = {
-  id: string
-  narration?: string
-  actions: ActorAction[]
-  holdMs?: number
-}
-
-/** CocreateResponse 中的增量分镜指令（与 story 同构：可追加 / 改写） */
-export type SceneDirective = {
-  append?: Scene[]
-  rewrite?: { from: number; scenes: Scene[] }
-}
-
+/** 四项能力维度（发展目标） */
 export type GuidanceDimension =
-  | 'observe_express'
-  | 'narrative_logic'
-  | 'imagination'
-  | 'problem_solving'
+  | 'observe_express' // 观察、表达与命名
+  | 'narrative_logic' // 叙事逻辑与因果
+  | 'imagination' // 想象延展与发散
+  | 'problem_solving' // 创造性解决问题
 
-export type CocreateResponse = {
-  understanding: string
-  guidanceIntent?: { dimension: GuidanceDimension; move: string }
-  askChild?: string
-  addShapes?: SketchShapeSpec[]
-  modifyShapes?: ShapePatch[]
-  scenes?: SceneDirective
-  story?: { append?: string; rewrite?: { from: number; text: string } }
-  speak: string
+/** 对话式共读 CROWD 提问类型（被验证的手段） */
+export type CrowdType =
+  | 'completion' // 填空
+  | 'recall' // 回忆
+  | 'open' // 开放
+  | 'wh' // 何人/何物/何地/为何/如何
+  | 'distancing' // 联系孩子自己的生活
+
+/** 兑现层行为词表：作用于孩子真实笔触的整体表演（本地几何，无 AI 坐标） */
+export type Behavior = 'fly' | 'grow' | 'spin' | 'hop' | 'walk' | 'bounce' | 'wobble'
+
+/** 引导引擎为本拍选定的目标（本地决定，保证轮换均衡可测） */
+export type GuidanceMove = { dimension: GuidanceDimension; crowd: CrowdType }
+
+/** LLM 一拍输出契约：无坐标、不替孩子命名/写故事；fulfill 仅当孩子明确指定动作 */
+export type PartnerResponse = {
+  /** 看到的具体细节，仅用于反映，禁止下定义/命名 */
+  noticed: string
+  dimension: GuidanceDimension
+  crowd: CrowdType
+  /** 对孩子上一拍的肯定与"推进一格"（PEER 的 E/E） */
+  peer?: { evaluate?: string; expand?: string }
+  /** 对孩子说的那句激发（PEER 的 P）——必填 */
+  provoke: string
+  /** 仅当孩子明确要某动作时非空 */
+  fulfill?: { behavior: Behavior; trigger: string } | null
+  /** 本拍孩子产出了什么（度量用） */
+  childSignal?: string
 }
 
-export type StoryEntry = { id: string; text: string }
+export type DialogTurn = { role: 'child' | 'partner'; text: string }
 
 export type SessionState = {
-  shapes: SketchShapeSpec[]
-  scenes: Scene[] // 分镜时间线（累积）
-  story: StoryEntry[]
-  dialog: { role: 'child' | 'system'; text: string }[]
-  guidance: GuidanceDimension[] // 历次引导维度（用于轮换、避免重复）
+  dialog: DialogTurn[]
+  /** 历次引导维度（用于均衡轮换） */
+  guidance: GuidanceDimension[]
+  /** 孩子产出信号历史（度量"说了多少、被拉伸多远"） */
+  signals: string[]
 }

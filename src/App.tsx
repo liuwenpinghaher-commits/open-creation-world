@@ -1,18 +1,17 @@
 import { useEffect, useRef, useState } from 'react'
-import { toRichText, type Editor } from 'tldraw'
+import type { Editor } from 'tldraw'
 import './App.css'
 import { SketchCanvas } from './sketch/SketchCanvas'
-import { toTldrawShape } from './sketch/renderSketch'
-import { playScenes, replayAll } from './animation/playScenes'
-import { startIdle } from './animation/idle'
+import { runBehavior } from './fulfill/behaviors'
+import { nextMove } from './guidance/engine'
 import { useVoice } from './voice/useVoice'
-import { requestCocreate } from './cocreate/cocreateClient'
+import { requestPartner } from './cocreate/cocreateClient'
 import { buildRequest } from './cocreate/buildRequest'
-import { applyResponse, emptySession } from './store/sessionStore'
+import { applyPartner, emptySession } from './store/sessionStore'
 import { saveCreation, loadCreation, clearCreation } from './store/persist'
 import type { SessionState } from './types/cocreate'
 
-type Phase = 'idle' | 'recording' | 'thinking' | 'replaying'
+type Phase = 'idle' | 'recording' | 'thinking'
 
 export default function App() {
   const editorRef = useRef<Editor | null>(null)
@@ -22,49 +21,21 @@ export default function App() {
   const [hint, setHint] = useState('')
   const { start, stop, speak } = useVoice()
 
-  // 持久化：sessionRef 给保存用（避免闭包过期）；restoredRef 防重复恢复
   const sessionRef = useRef(session)
   useEffect(() => { sessionRef.current = session }, [session])
   const restoredRef = useRef(false)
-
-  // 微动画("活起来")：idleStop 停止当前循环；idleIds 记录被微动的 record id（自动保存据此忽略）
-  const idleStopRef = useRef<(() => void) | null>(null)
-  const idleIdsRef = useRef<Set<string>>(new Set())
-
-  function stopIdle() {
-    idleStopRef.current?.()
-    idleStopRef.current = null
-    idleIdsRef.current = new Set()
-  }
-  /** 在画布现有的 AI 角色上(重)启微动 */
-  function restartIdle(s: SessionState = sessionRef.current) {
-    const editor = editorRef.current
-    if (!editor) return
-    stopIdle()
-    const ids = s.shapes
-      .map((sp) => sp.id)
-      .filter((id) => editor.getShape(`shape:${id}` as never))
-    if (!ids.length) return
-    idleIdsRef.current = new Set(ids.map((id) => `shape:${id}`))
-    idleStopRef.current = startIdle(editor, ids)
-  }
+  const dirtyRef = useRef(false) // 画布自上次感知后是否有改动（决定是否重新发图）
 
   function saveNow(s: SessionState = sessionRef.current) {
     const editor = editorRef.current
     if (!editor) return
-    try {
-      void saveCreation(s, editor.getSnapshot())
-    } catch (err) {
-      console.warn('save failed:', err)
-    }
+    try { void saveCreation(s, editor.getSnapshot()) } catch (err) { console.warn('save failed:', err) }
   }
 
-  // editor 异步挂载后：恢复上次创作 + 监听画布涂改防抖自动保存
   async function handleEditorMount(e: Editor) {
     editorRef.current = e
     if (import.meta.env.DEV) (window as unknown as { __editor?: Editor }).__editor = e
 
-    let restored: SessionState | null = null
     if (!restoredRef.current) {
       restoredRef.current = true
       try {
@@ -72,29 +43,15 @@ export default function App() {
         if (saved) {
           if (saved.snapshot) e.loadSnapshot(saved.snapshot as never)
           setSession(saved.session)
-          restored = saved.session
         }
-      } catch (err) {
-        console.warn('restore failed:', err)
-      }
+      } catch (err) { console.warn('restore failed:', err) }
     }
     e.setCurrentTool('draw')
-    if (restored) restartIdle(restored) // 恢复后让已有角色"活起来"
 
     let timer = 0
     e.store.listen(
-      (entry) => {
-        // 只由微动引起的 shape 更新(无新增/删除、且全是 idle 管理的 id) → 不触发保存，避免防抖被持续重置
-        const ch = entry.changes as {
-          added: Record<string, unknown>; removed: Record<string, unknown>; updated: Record<string, unknown>
-        }
-        const updatedIds = Object.keys(ch.updated)
-        const onlyIdle =
-          Object.keys(ch.added).length === 0 &&
-          Object.keys(ch.removed).length === 0 &&
-          updatedIds.length > 0 &&
-          updatedIds.every((id) => idleIdsRef.current.has(id))
-        if (onlyIdle) return
+      () => {
+        dirtyRef.current = true
         window.clearTimeout(timer)
         timer = window.setTimeout(() => saveNow(), 1000)
       },
@@ -105,9 +62,9 @@ export default function App() {
   async function handleNewStory() {
     if (phase !== 'idle') return
     const editor = editorRef.current
-    stopIdle()
     await clearCreation()
     setSession(emptySession())
+    dirtyRef.current = false
     if (editor) {
       const ids = [...editor.getCurrentPageShapeIds()]
       if (ids.length) editor.deleteShapes(ids)
@@ -119,98 +76,49 @@ export default function App() {
     window.setTimeout(() => setHint(''), 4000)
   }
 
-  async function exportCanvasPng(): Promise<string> {
+  function viewport(editor: Editor) {
+    const vp = editor.getViewportPageBounds()
+    const ok = !!vp && vp.w > 50 && vp.h > 50
+    return ok ? { width: vp.w, height: vp.h, offsetX: vp.x, offsetY: vp.y } : { width: 1000, height: 700, offsetX: 0, offsetY: 0 }
+  }
+
+  async function exportCanvasPng(): Promise<string | undefined> {
     const editor = editorRef.current
-    if (!editor) return ''
+    if (!editor) return undefined
     const ids = editor.getCurrentPageShapeIds()
-    if (ids.size === 0) return '' // 空画布不导出，让 AI 仅凭语音共创
+    if (ids.size === 0) return undefined // 空画布不发图，仅凭语音
     const { url } = await editor.toImageDataUrl([...ids], { format: 'png', background: true })
     return url
   }
 
-  /** 一拍共创：导出画 + 发后端 + 渲染 AI 简笔画/动画/故事 + 语音讲述。不管理 phase（由调用方管理） */
+  /** 一拍：感知(变了才发图) → 引导引擎选 move → 伙伴出激发 → 孩子明确要时兑现 → 说出来。不管理 phase。 */
   async function runTurn(utterance: string) {
     const editor = editorRef.current
     if (!editor) return
-    stopIdle() // 微动会改位姿，先停，交给分镜引擎；本拍结束再重启
-    const imageDataUrl = await exportCanvasPng()
-    const payload = buildRequest({ imageDataUrl, childUtterance: utterance, history: session.dialog, shapes: session.shapes, guidance: session.guidance })
-    const res = await requestCocreate(payload)
 
-    const vp = editor.getViewportPageBounds()
-    const ok = !!vp && vp.w > 50 && vp.h > 50
-    const canvas = ok
-      ? { width: vp.w, height: vp.h, offsetX: vp.x, offsetY: vp.y }
-      : { width: 1000, height: 700, offsetX: 0, offsetY: 0 }
+    const imageDataUrl = dirtyRef.current ? await exportCanvasPng() : undefined
+    if (imageDataUrl) dirtyRef.current = false
 
-    for (const spec of res.addShapes ?? []) {
-      try {
-        if (editor.getShape(`shape:${spec.id}` as never)) continue // M3：画布上已有同 id 则跳过
-        if (spec.kind === 'text' && spec.text) {
-          editor.createShape({
-            id: `shape:${spec.id}`,
-            type: 'text',
-            x: canvas.offsetX + (typeof spec.x === 'number' ? spec.x : 0.4) * canvas.width,
-            y: canvas.offsetY + (typeof spec.y === 'number' ? spec.y : 0.4) * canvas.height,
-            props: { richText: toRichText(spec.text), color: 'black' },
-          } as never)
-          continue
-        }
-        const shape = toTldrawShape(spec, canvas)
-        if (shape) editor.createShape(shape as never)
-      } catch (err) {
-        console.warn('createShape failed:', spec.id, err)
-      }
-    }
+    const move = nextMove(sessionRef.current.guidance)
+    const res = await requestPartner(buildRequest({ imageDataUrl, childUtterance: utterance, history: sessionRef.current.dialog, move }))
 
-    if (!ok) {
-      try {
-        editor.zoomToFit({ animation: { duration: 400 } })
-      } catch (err) {
-        console.warn('zoomToFit failed:', err)
-      }
-    }
-
-    // 合并分镜后，从本拍新增/改写的那一镜起演出（旁白同步用 TTS 念出）
-    const fromIndex = res.scenes?.rewrite ? res.scenes.rewrite.from : session.scenes.length
-    const merged = applyResponse(session, res, utterance)
+    const merged = applyPartner(sessionRef.current, res, utterance)
     setSession(merged)
 
-    if (merged.scenes.length > fromIndex) {
-      try {
-        await playScenes(editor, merged.scenes, fromIndex, canvas, { onNarrate: (t) => void speak(t) })
-      } catch (err) {
-        console.warn('play scenes failed:', err)
-      }
+    // 偶发兑现：把孩子自己画的笔触整体动起来（仅当孩子明确要求）
+    if (res.fulfill) {
+      const ids = [...editor.getCurrentPageShapeIds()].map(String)
+      try { await runBehavior(editor, res.fulfill.behavior, ids, viewport(editor)) }
+      catch (err) { console.warn('fulfill failed:', err) }
     }
-    await speak(res.speak || res.askChild || '')
-    saveNow(merged) // idle 已停，此时快照是干净基准位姿
-    restartIdle(merged) // 让新角色也"活起来"
+
+    const line = [res.peer?.evaluate, res.peer?.expand, res.provoke].filter(Boolean).join(' ')
+    await speak(line)
+    saveNow(merged)
   }
 
-  async function handleReplay() {
-    const editor = editorRef.current
-    if (!editor || phase !== 'idle' || session.scenes.length === 0) return
-    const vp = editor.getViewportPageBounds()
-    const ok = !!vp && vp.w > 50 && vp.h > 50
-    const canvas = ok
-      ? { width: vp.w, height: vp.h, offsetX: vp.x, offsetY: vp.y }
-      : { width: 1000, height: 700, offsetX: 0, offsetY: 0 }
-    setPhase('replaying')
-    stopIdle()
-    try {
-      await replayAll(editor, session.scenes, canvas, { onNarrate: (t) => void speak(t) })
-    } catch (err) {
-      console.warn('replay failed:', err)
-    } finally {
-      restartIdle()
-      setPhase('idle')
-    }
-  }
-
-  // 点击切换录音：点一下开始，再点一下结束并识别（避免“按住松开”在按钮外松手停不下来）
   async function handleMic() {
-    if (phase === 'thinking' || phase === 'replaying') return
+    if (phase === 'thinking') return
     if (phase === 'recording') {
       setPhase('thinking')
       try {
@@ -220,23 +128,15 @@ export default function App() {
       } catch (err) {
         console.error('voice turn failed:', err)
         flashHint('语音出了点小问题，先用打字试试吧～')
-      } finally {
-        setPhase('idle')
-      }
+      } finally { setPhase('idle') }
     } else {
-      try {
-        await start()
-        setPhase('recording')
-      } catch (err) {
-        console.error('mic start failed:', err)
-        flashHint('打不开麦克风，检查一下浏览器麦克风权限～')
-        setPhase('idle')
-      }
+      try { await start(); setPhase('recording') }
+      catch (err) { console.error('mic start failed:', err); flashHint('打不开麦克风，检查一下浏览器麦克风权限～'); setPhase('idle') }
     }
   }
 
   function submitTyped() {
-    if (phase === 'thinking' || phase === 'replaying' || !typed.trim()) return
+    if (phase === 'thinking' || !typed.trim()) return
     const t = typed.trim()
     setTyped('')
     setPhase('thinking')
@@ -245,24 +145,11 @@ export default function App() {
       .finally(() => setPhase('idle'))
   }
 
-  function setTool(name: 'draw' | 'eraser') {
-    editorRef.current?.setCurrentTool(name)
-  }
-  function undo() {
-    editorRef.current?.undo()
-  }
-  function clearCanvas() {
-    const ed = editorRef.current
-    if (!ed) return
-    const ids = [...ed.getCurrentPageShapeIds()]
-    if (ids.length) ed.deleteShapes(ids)
-  }
+  function setTool(name: 'draw' | 'eraser') { editorRef.current?.setCurrentTool(name) }
+  function undo() { editorRef.current?.undo() }
 
-  const micLabel =
-    phase === 'thinking' ? '✏️ 我在想…'
-    : phase === 'replaying' ? '🎬 演出中…'
-    : phase === 'recording' ? '🔴 说完了，点我'
-    : '🎙️ 点我说话'
+  const micLabel = phase === 'thinking' ? '✏️ 我在听…' : phase === 'recording' ? '🔴 说完了，点我' : '🎙️ 点我说话'
+  const lastPartner = [...session.dialog].reverse().find((d) => d.role === 'partner')
 
   return (
     <div className="shenbi">
@@ -272,41 +159,23 @@ export default function App() {
         <button type="button" title="画笔" onClick={() => setTool('draw')}>🖌️</button>
         <button type="button" title="橡皮" onClick={() => setTool('eraser')}>🧽</button>
         <button type="button" title="撤销" onClick={undo}>↩️</button>
-        <button type="button" title="全部擦掉" onClick={clearCanvas}>🗑️</button>
-        <button
-          type="button"
-          title="再演一遍"
-          onClick={handleReplay}
-          disabled={phase !== 'idle' || session.scenes.length === 0}
-        >
-          ▶️
-        </button>
-        <button type="button" title="新故事" onClick={handleNewStory} disabled={phase !== 'idle'}>
-          🆕
-        </button>
+        <button type="button" title="新的一张" onClick={handleNewStory} disabled={phase !== 'idle'}>🆕</button>
       </div>
 
+      {lastPartner ? <div className="partner-bubble">{lastPartner.text}</div> : null}
       {phase === 'thinking' ? <div className="thinking-overlay">✨ 我在想…</div> : null}
-
-      <div className="story-strip">
-        {session.story.map((e) => (
-          <p key={e.id}>{e.text}</p>
-        ))}
-      </div>
 
       <div className="talk-bar">
         {hint ? <span className="hint">{hint}</span> : null}
-        <button className="talk-btn" type="button" onClick={handleMic} disabled={phase === 'thinking' || phase === 'replaying'}>
+        <button className="talk-btn" type="button" onClick={handleMic} disabled={phase === 'thinking'}>
           {micLabel}
         </button>
         <input
           value={typed}
           placeholder="（或在这里打字告诉我）"
-          disabled={phase === 'thinking' || phase === 'replaying'}
+          disabled={phase === 'thinking'}
           onChange={(e) => setTyped(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') submitTyped()
-          }}
+          onKeyDown={(e) => { if (e.key === 'Enter') submitTyped() }}
         />
       </div>
     </div>

@@ -42,29 +42,20 @@ body,
   transform: scale(0.94);
 }
 
-.story-strip {
+.partner-bubble {
   position: absolute;
-  left: 16px;
+  left: 50%;
   top: 84px;
-  max-width: 38%;
-  max-height: 55%;
-  overflow-y: auto;
-  background: rgba(255, 255, 255, 0.88);
-  border-radius: 14px;
-  padding: 10px 14px;
-  box-shadow: 0 6px 24px rgb(40 50 66 / 12%);
-  z-index: 10;
-}
-
-.story-strip:empty {
-  display: none;
-}
-
-.story-strip p {
-  margin: 6px 0;
-  font-size: 18px;
+  transform: translateX(-50%);
+  max-width: 72%;
+  background: rgba(255, 255, 255, 0.94);
+  border-radius: 18px;
+  padding: 12px 20px;
+  font-size: 19px;
   line-height: 1.5;
   color: #2a3340;
+  box-shadow: 0 6px 24px rgb(40 50 66 / 14%);
+  z-index: 10;
 }
 
 .talk-bar {

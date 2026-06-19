@@ -1,57 +1,35 @@
 // @vitest-environment node
 import { describe, it, expect } from 'vitest'
-import { sanitizeCocreate } from '../../server/sanitize'
+import { sanitizePartner } from '../../server/sanitize'
+import type { GuidanceMove } from '../types/cocreate'
 
-describe('sanitizeCocreate', () => {
-  it('必填字段兜底：understanding/speak', () => {
-    const r = sanitizeCocreate({})
-    expect(r.understanding).toBe('')
-    expect(r.speak).toBe('我们接着画吧！')
+const MOVE: GuidanceMove = { dimension: 'imagination', crowd: 'open' }
+
+describe('sanitizePartner', () => {
+  it('必填兜底：provoke 缺失给默认；维度/提问强制用引导引擎下发的指令', () => {
+    const r = sanitizePartner({}, MOVE)
+    expect(r.provoke).toBeTruthy()
+    expect(r.dimension).toBe('imagination')
+    expect(r.crowd).toBe('open')
+    expect(r.fulfill).toBeNull()
   })
 
-  it('speak 缺失时退化用 askChild', () => {
-    const r = sanitizeCocreate({ askChild: '你想画什么呀？' })
-    expect(r.speak).toBe('你想画什么呀？')
-    expect(r.askChild).toBe('你想画什么呀？')
+  it('忽略模型偷改的维度，仍以指令为准', () => {
+    const r = sanitizePartner({ dimension: 'problem_solving', crowd: 'wh', provoke: '问' }, MOVE)
+    expect(r.dimension).toBe('imagination')
+    expect(r.crowd).toBe('open')
   })
 
-  it('过滤非法 addShapes（缺 id / kind 非法 / 坐标非数值兜底）', () => {
-    const r = sanitizeCocreate({
-      understanding: 'x', speak: 'y',
-      addShapes: [
-        { id: 'ok', kind: 'ellipse', x: 0.3, y: 0.4 },
-        { kind: 'ellipse', x: 0.1, y: 0.1 }, // 缺 id → 丢
-        { id: 'bad', kind: 'banana' }, // kind 非法 → 丢
-        { id: 'nocoord', kind: 'rectangle' }, // 缺坐标 → 兜底 0.4
-      ],
-    })
-    expect(r.addShapes?.map((s) => s.id)).toEqual(['ok', 'nocoord'])
-    expect(r.addShapes?.find((s) => s.id === 'nocoord')).toMatchObject({ x: 0.4, y: 0.4 })
+  it('fulfill 仅保留合法行为，非法/缺失置 null', () => {
+    expect(sanitizePartner({ provoke: 'p', fulfill: { behavior: 'fly', trigger: '让它飞' } }, MOVE).fulfill)
+      .toEqual({ behavior: 'fly', trigger: '让它飞' })
+    expect(sanitizePartner({ provoke: 'p', fulfill: { behavior: 'teleport' } }, MOVE).fulfill).toBeNull()
+    expect(sanitizePartner({ provoke: 'p' }, MOVE).fulfill).toBeNull()
   })
 
-  it('过滤非法 scenes.actions（do 非法 / 缺 shapeId），空镜丢弃', () => {
-    const r = sanitizeCocreate({
-      understanding: 'x', speak: 'y',
-      scenes: {
-        append: [
-          { id: 's1', actions: [{ shapeId: 'dog', do: 'moveTo', x: 0.5, y: 0.5 }, { shapeId: 'x', do: 'teleport' }, { do: 'wobble' }] },
-          { id: 's2', actions: [{ shapeId: 'z', do: 'badop' }] }, // 全非法且无旁白 → 整镜丢
-          { id: 's3', narration: '只有旁白也保留', actions: [] },
-        ],
-      },
-    })
-    expect(r.scenes?.append?.map((s) => s.id)).toEqual(['s1', 's3'])
-    expect(r.scenes?.append?.[0].actions).toHaveLength(1)
-    expect(r.scenes?.append?.[0].actions[0].do).toBe('moveTo')
-  })
-
-  it('guidanceIntent 维度非法则丢弃', () => {
-    expect(sanitizeCocreate({ understanding: '', speak: 's', guidanceIntent: { dimension: 'xxx', move: 'm' } }).guidanceIntent).toBeUndefined()
-    expect(sanitizeCocreate({ understanding: '', speak: 's', guidanceIntent: { dimension: 'imagination', move: 'm' } }).guidanceIntent?.dimension).toBe('imagination')
-  })
-
-  it('story.rewrite from 取整且非负', () => {
-    const r = sanitizeCocreate({ understanding: '', speak: 's', story: { rewrite: { from: -2.7, text: 'hi' } } })
-    expect(r.story?.rewrite).toEqual({ from: 0, text: 'hi' })
+  it('peer 的 evaluate/expand 透传，空则省略', () => {
+    expect(sanitizePartner({ provoke: 'p', peer: { evaluate: '真棒', expand: '飞过了大山' } }, MOVE).peer)
+      .toEqual({ evaluate: '真棒', expand: '飞过了大山' })
+    expect(sanitizePartner({ provoke: 'p', peer: {} }, MOVE).peer).toBeUndefined()
   })
 })

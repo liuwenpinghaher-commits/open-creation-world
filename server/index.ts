@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path'
 dotenv.config({ path: join(dirname(fileURLToPath(import.meta.url)), '.env'), override: true })
 
 import express from 'express'
-import { callModel } from './model'
+import { callPartner } from './partner'
 import { transcribe, synthesize } from './voice'
 
 const app = express()
@@ -17,11 +17,11 @@ function fail(res: import('express').Response, where: string, e: unknown) {
   res.status(500).json({ error: '服务暂时不可用，请稍后再试' })
 }
 
-app.post('/api/cocreate', async (req, res) => {
+app.post('/api/partner', async (req, res) => {
   try {
-    res.json(await callModel(req.body))
+    res.json(await callPartner(req.body))
   } catch (e) {
-    fail(res, 'cocreate', e)
+    fail(res, 'partner', e)
   }
 })
 

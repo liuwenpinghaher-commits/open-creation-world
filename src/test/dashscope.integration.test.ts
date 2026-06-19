@@ -4,18 +4,18 @@ import zlib from 'node:zlib'
 import { config } from 'dotenv'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
-import { callModel } from '../../server/model'
+import { callPartner } from '../../server/partner'
 import { synthesize, transcribe } from '../../server/voice'
-import { applyResponse, emptySession } from '../store/sessionStore'
-import { toTldrawShape } from '../sketch/renderSketch'
+import { applyPartner, emptySession } from '../store/sessionStore'
+import { nextMove } from '../guidance/engine'
 
 // 加载真实 key（server/.env），与后端运行时一致
 config({ path: join(dirname(fileURLToPath(import.meta.url)), '../../server/.env'), override: true })
 
-// 真实 API 测试默认跳过（慢 + 消耗额度 + 非确定）；用 RUN_REAL_API=1 npm test 触发
+// 真实 API 测试默认跳过（慢 + 消耗额度 + 非确定）；用 RUN_REAL_API=1 触发
 const RUN = process.env.RUN_REAL_API === '1'
 
-/** 生成一张合法的简笔画 PNG dataURL（白底 + 黑色方框，模拟孩子画的造物，避免过小被 API 拒绝） */
+/** 合法简笔画 PNG dataURL（白底 + 黑色方框，模拟孩子画的造物，避免过小被 API 拒绝） */
 function makeSketchPng(): string {
   const W = 240, H = 180
   const crcTable: number[] = (() => {
@@ -48,28 +48,46 @@ function makeSketchPng(): string {
 }
 
 describe.runIf(RUN)('百炼真实业务集成测试（RUN_REAL_API=1）', () => {
-  it('多模态：看简笔画 + 话 → 合法且可渲染的 CocreateResponse', async () => {
-    const res = await callModel({
+  it('创作伙伴：看画+话 → 出一句激发，不替孩子作画/写坐标', async () => {
+    const res = await callPartner({
       imageDataUrl: makeSketchPng(),
-      childUtterance: '我画了一匹会飞的马，让它飞到云朵那里',
+      childUtterance: '你看我画的',
       history: [],
+      move: { dimension: 'observe_express', crowd: 'open' },
     })
-    expect(res.understanding).toBeTruthy()
-    expect(res.speak).toBeTruthy()
-    for (const sp of res.addShapes ?? []) {
-      expect(typeof sp.id).toBe('string')
-      expect(['draw', 'ellipse', 'rectangle', 'line', 'arrow', 'text']).toContain(sp.kind)
-      const shape = toTldrawShape(sp, { width: 1000, height: 700 })
-      if (shape) expect(Number.isNaN(shape.x)).toBe(false)
-    }
-    for (const sc of res.scenes?.append ?? []) {
-      expect(Array.isArray(sc.actions)).toBe(true)
-      for (const a of sc.actions) {
-        expect(typeof a.shapeId).toBe('string')
-        expect(['enter', 'disappear', 'moveTo', 'scaleTo', 'rotateTo', 'wobble']).toContain(a.do)
-      }
-    }
+    expect(res.provoke.trim().length).toBeGreaterThan(0) // 必须出一句激发
+    expect(res.dimension).toBe('observe_express') // 维度由引导引擎钉死
+    expect(res.fulfill).toBeNull() // 孩子没要求动作 → 不主动让画动
+    // 契约里根本没有坐标/addShapes 字段——结构上杜绝 AI 替孩子作画
+    expect((res as Record<string, unknown>).addShapes).toBeUndefined()
   }, 60000)
+
+  it('兑现：孩子明确说"让它飞" → fulfill 给出合法行为', async () => {
+    const res = await callPartner({
+      imageDataUrl: makeSketchPng(),
+      childUtterance: '让我画的小鸟飞起来！',
+      history: [],
+      move: { dimension: 'imagination', crowd: 'open' },
+    })
+    expect(res.fulfill).not.toBeNull()
+    expect(['fly', 'grow', 'spin', 'hop', 'walk', 'bounce', 'wobble']).toContain(res.fulfill!.behavior)
+  }, 60000)
+
+  it('完整多轮共创：维度均衡轮换，每拍都在激发孩子（不替他生成）', async () => {
+    let s = emptySession()
+    const turns = ['你看我画的', '它是我的宠物龙', '它住在山洞里', '可是山洞被大石头堵住了']
+    for (const t of turns) {
+      const move = nextMove(s.guidance)
+      const res = await callPartner({ imageDataUrl: makeSketchPng(), childUtterance: t, history: s.dialog, move })
+      expect(res.provoke.trim().length).toBeGreaterThan(0)
+      s = applyPartner(s, res, t)
+    }
+    // 四拍 → 四个不同维度（引擎均衡轮换）
+    expect(new Set(s.guidance).size).toBe(4)
+    // 对话里有孩子也有伙伴
+    expect(s.dialog.some((d) => d.role === 'child')).toBe(true)
+    expect(s.dialog.some((d) => d.role === 'partner')).toBe(true)
+  }, 180000)
 
   it('TTS：文本 → 非空音频字节 + 合理 mime', async () => {
     const { audio, mime } = await synthesize('小马飞起来了，真好看')
@@ -82,44 +100,4 @@ describe.runIf(RUN)('百炼真实业务集成测试（RUN_REAL_API=1）', () => 
     const text = await transcribe(audio, mime)
     expect(text).toMatch(/兔|草|跳/)
   }, 90000)
-
-  it('完整多轮共创：分镜剧情演出（引用有效 + 出现移动/互动动作）', async () => {
-    let s = emptySession()
-    const turns = ['我画了一只小猫', '给小猫画一个皮球', '让小猫跑过去追皮球，追到就把皮球抱住']
-    let sawMotion = false
-    let sawValidRef = false
-
-    for (const t of turns) {
-      const res = await callModel({
-        imageDataUrl: makeSketchPng(),
-        childUtterance: t,
-        history: s.dialog,
-        shapes: s.shapes.map((x) => ({ id: x.id, kind: x.kind })),
-      })
-      expect(res.speak || res.askChild).toBeTruthy()
-
-      // 本拍可引用的 id = 已有 + 本拍新建
-      const knownIds = new Set([...s.shapes.map((x) => x.id), ...(res.addShapes ?? []).map((x) => x.id)])
-      for (const sc of res.scenes?.append ?? []) {
-        for (const a of sc.actions) {
-          if (['moveTo', 'scaleTo', 'rotateTo'].includes(a.do)) sawMotion = true
-          if (knownIds.has(a.shapeId)) sawValidRef = true
-        }
-      }
-
-      s = applyResponse(s, res, t)
-      for (const sp of res.addShapes ?? []) {
-        const shape = toTldrawShape(sp, { width: 1000, height: 700 })
-        if (shape) {
-          expect(Number.isNaN(shape.x)).toBe(false)
-          expect(Number.isNaN(shape.y)).toBe(false)
-        }
-      }
-    }
-
-    expect(s.dialog.length).toBeGreaterThanOrEqual(turns.length)
-    expect(s.scenes.length).toBeGreaterThan(0) // 真的排了分镜
-    expect(sawValidRef).toBe(true) // 分镜动作引用到真实存在的图形
-    expect(sawMotion).toBe(true) // 至少出现一次移动/缩放/旋转（剧情演出）
-  }, 180000)
 })
