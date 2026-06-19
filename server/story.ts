@@ -7,6 +7,7 @@ export type StoryResult = {
   narrative: string
   highlights: string[]
   tags: { torrance: Record<string, number>; dispositions: string[] }
+  interests: string[] // 这次对话里检测到的孩子兴趣主题（自动识别）
 }
 
 const SYSTEM = `你是一位懂"学习故事(Learning Stories)"方法的幼教老师。根据一次"孩子和创作伙伴"的对话，给家长写一篇温暖、强项导向的学习故事。
@@ -17,9 +18,10 @@ const SYSTEM = `你是一位懂"学习故事(Learning Stories)"方法的幼教�
 - highlights：2-3 条孩子的高光（想出新点子 / 自己解决问题 / 生动的表达），尽量用孩子原话。
 - torrance：给这次创作的创造力四维各打 0-3 分整数——fluency(点子多少)、flexibility(点子是否跨不同方面)、originality(是否新奇)、elaboration(是否加细节)。
 - dispositions：从 ["好奇","坚持","勇于尝试","爱表达","专注"] 里挑这次明显体现的（0-3 个）。
+- interests：这次对话里孩子反复提到或明显感兴趣的主题（如"恐龙""太空""小动物"），0-3 个简短词。
 
 只输出一个 JSON 对象：
-{"narrative":"...","highlights":["..."],"tags":{"torrance":{"fluency":2,"flexibility":1,"originality":2,"elaboration":1},"dispositions":["好奇","爱表达"]}}`
+{"narrative":"...","highlights":["..."],"tags":{"torrance":{"fluency":2,"flexibility":1,"originality":2,"elaboration":1},"dispositions":["好奇","爱表达"]},"interests":["恐龙","火山"]}`
 
 function extractJson(t: string): string {
   const f = t.match(/```(?:json)?\s*([\s\S]*?)```/); if (f) return f[1].trim()
@@ -61,9 +63,12 @@ export async function callStory(input: {
   const dispRaw = (raw.tags as { dispositions?: unknown })?.dispositions
   const dispositions = Array.isArray(dispRaw) ? dispRaw.filter((d): d is string => typeof d === 'string' && DISP.includes(d)) : []
 
+  const interests = Array.isArray(raw.interests) ? raw.interests.filter((h): h is string => typeof h === 'string' && h.trim().length > 0).map((h) => h.trim()).slice(0, 3) : []
+
   return {
     narrative: typeof raw.narrative === 'string' ? raw.narrative : '今天又一起创作了一会儿，下次接着玩吧～',
     highlights: Array.isArray(raw.highlights) ? raw.highlights.filter((h): h is string => typeof h === 'string').slice(0, 3) : [],
     tags: { torrance, dispositions },
+    interests,
   }
 }

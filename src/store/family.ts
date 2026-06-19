@@ -1,8 +1,8 @@
 import Dexie, { type Table } from 'dexie'
-import type { ChildProfile, ContentSafety, GuidancePrefs, ParentGate } from '../types/settings'
+import type { ChildProfile, ContentSafety, GuidancePrefs, LearningStory, ParentGate } from '../types/settings'
 import { defaultPrefs, defaultSafety } from '../types/settings'
 
-// 家庭配置：孩子档案 + 每孩引导偏好 + 内容安全 + 家长门。纯本地。
+// 家庭配置：孩子档案 + 每孩引导偏好 + 内容安全 + 家长门 + 学习故事。纯本地。
 type PrefsRow = GuidancePrefs & { childId: string }
 type KV = { key: string; value: unknown }
 
@@ -10,9 +10,11 @@ class FamilyDB extends Dexie {
   profiles!: Table<ChildProfile, string>
   prefs!: Table<PrefsRow, string>
   kv!: Table<KV, string>
+  stories!: Table<LearningStory, string>
   constructor() {
     super('shenbi-family')
     this.version(1).stores({ profiles: 'id', prefs: 'childId', kv: 'key' })
+    this.version(2).stores({ profiles: 'id', prefs: 'childId', kv: 'key', stories: 'id, childId, workId' })
   }
 }
 const db = new FamilyDB()
@@ -49,3 +51,18 @@ export const getSafety = () => kvGet<ContentSafety>('safety', defaultSafety())
 export const saveSafety = (s: ContentSafety) => kvSet('safety', s)
 export const getGate = () => kvGet<ParentGate>('gate', { mode: 'arith' })
 export const saveGate = (g: ParentGate) => kvSet('gate', g)
+
+// 隐私模式：开启则不上传画面，仅凭语音引导
+export const getPrivacy = () => kvGet<boolean>('privacyMode', false)
+export const setPrivacy = (v: boolean) => kvSet('privacyMode', v)
+
+// 学习故事持久化（成长报告用）
+export async function saveStory(s: LearningStory): Promise<void> { await db.stories.put(s) }
+export async function listStories(childId?: string): Promise<LearningStory[]> {
+  const all = childId ? await db.stories.where('childId').equals(childId).toArray() : await db.stories.toArray()
+  return all.sort((a, b) => b.createdAt - a.createdAt)
+}
+export async function setFamilyNote(storyId: string, note: string): Promise<void> {
+  const s = await db.stories.get(storyId)
+  if (s) await db.stories.put({ ...s, familyNote: note })
+}

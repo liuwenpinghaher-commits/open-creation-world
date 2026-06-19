@@ -5,7 +5,10 @@ import { defaultPrefs, defaultSafety } from '../types/settings'
 import {
   listProfiles, saveProfile, deleteProfile, newProfileId,
   getPrefs, savePrefs, getSafety, saveSafety, getActiveChildId, setActiveChildId, getGate,
+  getPrivacy, setPrivacy, listStories, setFamilyNote,
 } from '../store/family'
+import { aggregateStories, type ChildReport } from '../guidance/report'
+import type { LearningStory } from '../types/settings'
 
 const DIMS: { key: GuidanceDimension; label: string }[] = [
   { key: 'observe_express', label: '观察表达' },
@@ -14,6 +17,7 @@ const DIMS: { key: GuidanceDimension; label: string }[] = [
   { key: 'problem_solving', label: '想办法' },
 ]
 const EMOJIS = ['🦖', '🐱', '🚀', '🌈', '🦄', '🐰', '🌸', '⚽']
+const nowMs = () => Date.now()
 
 // 简易非加密 hash（家用门，仅防孩子）
 function hash(s: string): string {
@@ -77,7 +81,10 @@ type MaskedConfig = {
 
 export function Settings({ onClose, onChanged }: { onClose: () => void; onChanged: () => void }) {
   const [unlocked, setUnlocked] = useState(false)
-  const [tab, setTab] = useState<'system' | 'child' | 'guide' | 'safety'>('child')
+  const [tab, setTab] = useState<'system' | 'child' | 'guide' | 'safety' | 'report'>('child')
+  const [privacy, setPrivacyState] = useState(false)
+  const [stories, setStories] = useState<LearningStory[]>([])
+  const [report, setReport] = useState<ChildReport | null>(null)
 
   const [config, setConfig] = useState<MaskedConfig | null>(null)
   const [modelKey, setModelKey] = useState('')
@@ -98,8 +105,19 @@ export function Settings({ onClose, onChanged }: { onClose: () => void; onChange
       setActiveId(aid)
       if (aid) setPrefs(await getPrefs(aid))
       setSafety(await getSafety())
+      setPrivacyState(await getPrivacy())
     })()
   }, [unlocked])
+
+  // 报告页：加载活跃孩子的学习故事并聚合
+  useEffect(() => {
+    if (!unlocked || tab !== 'report') return
+    void (async () => {
+      const ss = await listStories(activeId ?? undefined)
+      setStories(ss)
+      setReport(aggregateStories(ss, nowMs()))
+    })()
+  }, [unlocked, tab, activeId])
 
   async function reloadProfiles(active?: string | null) {
     const ps = await listProfiles(); setProfiles(ps)
@@ -114,7 +132,7 @@ export function Settings({ onClose, onChanged }: { onClose: () => void; onChange
 
   async function addChild() {
     const id = newProfileId()
-    const p: ChildProfile = { id, name: '宝贝', emoji: EMOJIS[profiles.length % EMOJIS.length], age: 7, interests: [], dispositions: {}, createdAt: Date.now() }
+    const p: ChildProfile = { id, name: '宝贝', emoji: EMOJIS[profiles.length % EMOJIS.length], age: 7, interests: [], dispositions: {}, createdAt: nowMs() }
     await saveProfile(p); await setActiveChildId(id); await reloadProfiles(id); onChanged()
   }
   async function patchActive(patch: Partial<ChildProfile>) {
@@ -152,6 +170,7 @@ export function Settings({ onClose, onChanged }: { onClose: () => void; onChange
         <div className="settings-tabs">
           <button className={tab === 'child' ? 'on' : ''} onClick={() => setTab('child')}>孩子</button>
           <button className={tab === 'guide' ? 'on' : ''} onClick={() => setTab('guide')}>引导</button>
+          <button className={tab === 'report' ? 'on' : ''} onClick={() => setTab('report')}>报告</button>
           <button className={tab === 'safety' ? 'on' : ''} onClick={() => setTab('safety')}>安全</button>
           <button className={tab === 'system' ? 'on' : ''} onClick={() => setTab('system')}>系统</button>
         </div>
@@ -201,11 +220,45 @@ export function Settings({ onClose, onChanged }: { onClose: () => void; onChange
           </div>
         ) : null}
 
+        {tab === 'report' ? (
+          <div className="settings-sec">
+            <h3>成长报告{active ? `（${active.name}）` : ''}</h3>
+            {report && report.count > 0 ? (
+              <>
+                <p className="review-stat">共 <b>{report.count}</b> 篇学习故事，本周 <b>{report.thisWeek}</b> 篇</p>
+                <div className="torrance-bars">
+                  {report.torrance.map((t) => (
+                    <div key={t.key} className="torr-row">
+                      <span className="torr-label">{t.label}</span>
+                      <span className="torr-bar"><i style={{ width: `${(t.avg / 3) * 100}%` }} /></span>
+                      <span className="torr-val">{t.avg}</span>
+                    </div>
+                  ))}
+                </div>
+                {report.dispositions.length ? (
+                  <div className="review-dims">{report.dispositions.map((d) => <span key={d.name} className="review-dim">{d.name} ×{d.count}</span>)}</div>
+                ) : null}
+                <h3>最近的学习故事</h3>
+                {stories.slice(0, 5).map((s) => (
+                  <div key={s.id} className="learning-story">
+                    <p className="story-narrative">{s.narrative}</p>
+                    <label className="family-note">家人想说：
+                      <input defaultValue={s.familyNote ?? ''} placeholder="给孩子留一句话…"
+                        onBlur={(e) => void setFamilyNote(s.id, e.target.value)} />
+                    </label>
+                  </div>
+                ))}
+              </>
+            ) : <p className="review-empty">还没有学习故事。在成长册里点「✨生成学习故事」就会出现在这里。</p>}
+          </div>
+        ) : null}
+
         {tab === 'safety' ? (
           <div className="settings-sec">
             <h3>内容安全</h3>
             <label>过滤强度 <select value={safety.filterLevel} onChange={(e) => patchSafety({ filterLevel: e.target.value as ContentSafety['filterLevel'] })}><option value="standard">标准</option><option value="strict">严格</option></select></label>
             <label>话题黑名单（逗号分隔）<input value={safety.blockedTopics.join('、')} onChange={(e) => patchSafety({ blockedTopics: e.target.value.split(/[、,，]/).map((s) => s.trim()).filter(Boolean) })} /></label>
+            <label className="chk"><input type="checkbox" checked={privacy} onChange={(e) => { setPrivacyState(e.target.checked); void setPrivacy(e.target.checked); onChanged() }} /> 隐私模式（不上传画面，仅凭语音引导）</label>
             <p className="review-empty">「只鼓励不否定」始终开启，不可关闭。</p>
           </div>
         ) : null}

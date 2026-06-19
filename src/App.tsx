@@ -14,8 +14,8 @@ import { saveWork, loadWork, listWorks, deleteWork, newWorkId, getCurrentId, set
 import { summarizeSession } from './guidance/summary'
 import { Settings } from './settings/Settings'
 import { buildChildContext, moveOptsFrom } from './settings/childContext'
-import { getActiveChildId, listProfiles, getPrefs, getSafety } from './store/family'
-import { defaultPrefs, defaultSafety, type ChildContext } from './types/settings'
+import { getActiveChildId, listProfiles, getPrefs, getSafety, getPrivacy, saveStory, saveProfile } from './store/family'
+import { defaultPrefs, defaultSafety, type ChildContext, type LearningStory } from './types/settings'
 import type { SessionState } from './types/cocreate'
 
 type Phase = 'idle' | 'recording' | 'thinking'
@@ -24,6 +24,7 @@ type Phase = 'idle' | 'recording' | 'thinking'
 function exposeForTest(e: Editor) {
   if (import.meta.env.DEV) (window as unknown as { __editor?: Editor }).__editor = e
 }
+const nowMs = () => Date.now() // 模块级，避免在组件渲染作用域里直接调 Date.now
 
 export default function App() {
   const editorRef = useRef<Editor | null>(null)
@@ -44,6 +45,8 @@ export default function App() {
   const childCtxRef = useRef<ChildContext | undefined>(undefined)
   const moveOptsRef = useRef<ReturnType<typeof moveOptsFrom>>(moveOptsFrom(defaultPrefs()))
   const activeChildRef = useRef<string | undefined>(undefined)
+  const activeProfileRef = useRef<import('./types/settings').ChildProfile | null>(null)
+  const privacyRef = useRef(false)
   async function loadFamily() {
     try {
       const profiles = await listProfiles()
@@ -54,6 +57,8 @@ export default function App() {
       childCtxRef.current = buildChildContext(active, prefs, safety)
       moveOptsRef.current = moveOptsFrom(prefs)
       activeChildRef.current = active?.id
+      activeProfileRef.current = active
+      privacyRef.current = await getPrivacy()
     } catch { childCtxRef.current = buildChildContext(null, defaultPrefs(), defaultSafety()) }
   }
   useEffect(() => { void loadFamily() }, [])
@@ -145,13 +150,34 @@ export default function App() {
     if (id === workIdRef.current) await handleNewStory()
   }
 
-  /** 生成学习故事（Learning Stories）：把这次创作的对话送后端生成强项导向叙事 */
+  /** 生成学习故事（Learning Stories）：生成强项导向叙事，持久化，并把检测到的兴趣并入孩子档案 */
   async function makeStory(w: WorkRecord) {
     try {
-      const r = await fetch('/api/story', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dialog: w.session.dialog }) })
+      const profile = activeProfileRef.current
+      const r = await fetch('/api/story', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dialog: w.session.dialog, childName: profile?.name, age: profile?.age }),
+      })
       if (!r.ok) return
-      const data = await r.json() as { narrative: string; highlights?: string[] }
+      const data = await r.json() as { narrative: string; highlights?: string[]; tags?: LearningStory['tags']; interests?: string[] }
       setStories((s) => ({ ...s, [w.id]: { narrative: data.narrative, highlights: data.highlights ?? [] } }))
+
+      const childId = w.childId ?? activeChildRef.current ?? 'unknown'
+      const story: LearningStory = {
+        id: `s_${w.id}`, workId: w.id, childId,
+        narrative: data.narrative, highlights: data.highlights ?? [],
+        tags: data.tags ?? { torrance: {}, dispositions: [] }, createdAt: nowMs(),
+      }
+      await saveStory(story)
+
+      // 兴趣自动识别：把检测到的新主题并入活跃孩子档案
+      if (data.interests?.length && profile) {
+        const merged = Array.from(new Set([...profile.interests, ...data.interests])).slice(0, 12)
+        if (merged.length !== profile.interests.length) {
+          await saveProfile({ ...profile, interests: merged })
+          await loadFamily()
+        }
+      }
     } catch (err) { console.warn('story failed:', err) }
   }
 
@@ -183,7 +209,8 @@ export default function App() {
     setHeard(utterance) // P4：回显"我听到你说…"，听错可纠正
     const drew = dirtyRef.current // 这一拍孩子是否动过笔
     const shapeCount = editor.getCurrentPageShapeIds().size
-    const imageDataUrl = drew ? await exportCanvasPng() : undefined
+    // 隐私模式：不上传画面，仅凭语音引导
+    const imageDataUrl = drew && !privacyRef.current ? await exportCanvasPng() : undefined
     if (imageDataUrl) dirtyRef.current = false
 
     // 节奏自适应：结合孩子这句 + 是否在画，判断卡住/投入，决定降难度+加支架

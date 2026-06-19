@@ -254,3 +254,64 @@ test('成长故事：把一次创作生成强项导向的学习故事', async ({
   await expect(page.locator('.learning-story')).toContainText('真有想象力')
   await expect(page.locator('.story-highlights')).toContainText('自己起名字')
 })
+
+async function passGate(page: Page) {
+  await page.locator('.kid-tools button[title="设置（家长）"]').click()
+  const q = (await page.locator('.gate-card b').textContent()) ?? ''
+  const [a, b] = (q.match(/\d+/g) ?? ['0', '0']).map(Number)
+  await page.locator('.gate-hold').dispatchEvent('pointerdown')
+  await page.waitForTimeout(2200)
+  await page.locator('.gate-input').fill(String(a + b))
+  await page.locator('.gate-card .review-close').click()
+  await expect(page.locator('.settings-card')).toBeVisible()
+}
+
+test('隐私模式 + 成长报告 + 兴趣识别', async ({ page }) => {
+  const reqs: { imageDataUrl?: string }[] = []
+  await page.route('**/api/partner', async (route) => {
+    reqs.push(route.request().postDataJSON())
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ noticed: '', dimension: 'imagination', crowd: 'open', provoke: '它叫什么呀？', fulfill: null, childSignal: '画了恐龙' }) })
+  })
+  await page.route('**/api/tts', (route) => route.fulfill({ status: 200, contentType: 'audio/wav', body: '' }))
+  await page.route('**/api/config', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ model: { id: 'm', baseUrl: 'x', apiKey: { set: false, last4: '' } }, voice: { sttEnabled: true, ttsEnabled: true, ttsVoice: 'Cherry', apiKey: { set: false, last4: '' } }, fulfill: { enabled: true, behaviors: [], animatedDrawingsUrl: '' } }) }))
+  await page.route('**/api/story', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ narrative: '今天画了恐龙，想象力真好。', highlights: ['想出恐龙'], tags: { torrance: { fluency: 2, flexibility: 2, originality: 3, elaboration: 1 }, dispositions: ['好奇'] }, interests: ['恐龙'] }) }))
+
+  // 真实指针描边（触发 user 脏标记，真实孩子画笔即如此）
+  const stroke = async (x0: number) => {
+    await page.mouse.move(x0, 320); await page.mouse.down()
+    await page.mouse.move(x0 + 40, 360); await page.mouse.move(x0 + 80, 320); await page.mouse.up()
+  }
+
+  await page.goto('/')
+  await expect.poll(async () => page.evaluate(() => !!(window as unknown as { __editor?: unknown }).__editor)).toBe(true)
+
+  // 第 1 拍：默认非隐私 → 带画面
+  await stroke(280)
+  await sendTurn(page, '你看我的恐龙')
+  await expect(page.locator('.partner-bubble')).toBeVisible()
+  expect(String(reqs[0]?.imageDataUrl).slice(0, 11), `reqs[0]=${JSON.stringify(Object.keys(reqs[0] ?? {}))}`).toBe('data:image/')
+
+  // 开隐私模式
+  await passGate(page)
+  await page.locator('.settings-tabs button', { hasText: '安全' }).click()
+  await page.locator('.settings-sec label.chk', { hasText: '隐私模式' }).locator('input').check()
+  await page.locator('.settings-card .review-close').click()
+
+  // 第 2 拍：隐私模式 → 不带画面（即使又画了）
+  await stroke(520)
+  await sendTurn(page, '它在飞')
+  await expect.poll(() => reqs.length).toBeGreaterThan(1)
+  expect(reqs[1].imageDataUrl).toBeUndefined()
+
+  // 生成学习故事 → 报告页能看到叙事与 Torrance 趋势
+  await page.locator('.kid-tools button[title="成长册（给爸爸妈妈看）"]').click()
+  await page.locator('.journal-item.current button', { hasText: '生成学习故事' }).click()
+  await expect(page.locator('.learning-story')).toBeVisible()
+  await page.locator('.review-close').click()
+
+  await passGate(page)
+  await page.locator('.settings-tabs button', { hasText: '报告' }).click()
+  await expect(page.locator('.settings-sec')).toContainText('学习故事')
+  await expect(page.locator('.story-narrative')).toContainText('想象力真好')
+  await expect(page.locator('.torrance-bars')).toBeVisible()
+})
