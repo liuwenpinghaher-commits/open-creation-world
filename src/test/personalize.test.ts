@@ -24,6 +24,15 @@ describe('personalizeBlock', () => {
     expect(personalizeBlock(buildChildContext(profile({ age: 5 }), defaultPrefs(), defaultSafety()))).toContain('二选一')
     expect(personalizeBlock(buildChildContext(profile({ age: 10 }), defaultPrefs(), defaultSafety()))).toContain('挑战')
   })
+
+  it('人设：名字/性格/主见都进 prompt；均衡=有观点会讨论；顺着/会坚持各异', () => {
+    const base = buildChildContext(profile(), { ...defaultPrefs(), companionName: '泡泡' }, defaultSafety())
+    const block = personalizeBlock(base)
+    expect(block).toContain('泡泡')
+    expect(block).toContain('善意讨论') // balanced 默认
+    expect(personalizeBlock(buildChildContext(profile(), { ...defaultPrefs(), opinionatedness: 'follow' }, defaultSafety()))).toContain('多顺着孩子')
+    expect(personalizeBlock(buildChildContext(profile(), { ...defaultPrefs(), opinionatedness: 'opinionated' }, defaultSafety()))).toContain('坚持')
+  })
 })
 
 describe('buildChildContext', () => {

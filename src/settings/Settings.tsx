@@ -85,7 +85,7 @@ type MaskedConfig = {
 
 export function Settings({ onClose, onChanged }: { onClose: () => void; onChanged: () => void }) {
   const [unlocked, setUnlocked] = useState(false)
-  const [tab, setTab] = useState<'overview' | 'system' | 'child' | 'guide' | 'safety' | 'report'>('overview')
+  const [tab, setTab] = useState<'overview' | 'system' | 'child' | 'companion' | 'guide' | 'safety' | 'report'>('overview')
   const [privacy, setPrivacyState] = useState(false)
   const [stories, setStories] = useState<LearningStory[]>([])
   const [report, setReport] = useState<ChildReport | null>(null)
@@ -173,7 +173,7 @@ export function Settings({ onClose, onChanged }: { onClose: () => void; onChange
   }
 
   const NAV: { k: typeof tab; label: string; icon: string }[] = [
-    { k: 'overview', label: '总览', icon: '🏠' }, { k: 'child', label: '孩子', icon: '🧒' }, { k: 'guide', label: '引导', icon: '🧭' },
+    { k: 'overview', label: '总览', icon: '🏠' }, { k: 'child', label: '孩子', icon: '🧒' }, { k: 'companion', label: '伙伴', icon: '🤖' }, { k: 'guide', label: '引导', icon: '🧭' },
     { k: 'report', label: '成长报告', icon: '📈' }, { k: 'safety', label: '内容安全', icon: '🛡️' }, { k: 'system', label: '系统', icon: '⚙️' },
   ]
   return (
@@ -228,6 +228,31 @@ export function Settings({ onClose, onChanged }: { onClose: () => void; onChange
                 <button className="journal-del" onClick={() => removeChild(active.id)}>删除这个孩子</button>
               </div>
             ) : <p className="review-empty">先添加一个孩子吧～</p>}
+          </div>
+        ) : null}
+
+        {tab === 'companion' ? (
+          <div className="settings-sec">
+            <h3>AI 伙伴的人设{active ? `（陪 ${active.name}）` : ''}</h3>
+            <label>伙伴名字 <input value={prefs.companionName} onChange={(e) => patchPrefs({ companionName: e.target.value })} /></label>
+            <label>性格
+              <select value={prefs.persona} onChange={(e) => patchPrefs({ persona: e.target.value as GuidancePrefs['persona'] })}>
+                <option value="curious">好奇宝宝</option>
+                <option value="gentle">温柔耐心</option>
+                <option value="funny">鬼马搞笑</option>
+                <option value="scientist">爱较真的小科学家</option>
+                <option value="steady">沉稳大朋友</option>
+              </select>
+            </label>
+            <label>有主见 / 会坚持
+              <select value={prefs.opinionatedness} onChange={(e) => patchPrefs({ opinionatedness: e.target.value as GuidancePrefs['opinionatedness'] })}>
+                <option value="follow">多顺着孩子</option>
+                <option value="balanced">均衡（有观点、会善意讨论）</option>
+                <option value="opinionated">有想法、会多坚持一下</option>
+              </select>
+            </label>
+            <label className="chk"><input type="checkbox" checked={prefs.humor} onChange={(e) => patchPrefs({ humor: e.target.checked })} /> 幽默感（爱开玩笑）</label>
+            <p className="review-empty">朋友是诚实的、有想法的，不是只会附和的应声虫——但永远尊重「画是孩子的」。音色在「系统」页设置。</p>
           </div>
         ) : null}
 

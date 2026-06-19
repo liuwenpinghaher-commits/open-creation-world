@@ -222,6 +222,11 @@ test('家长门 + 设置：算术门通过、添加孩子、改引导偏好', as
   await page.locator('.profile.add').click()
   await expect(page.locator('.profile-edit')).toBeVisible()
 
+  // 伙伴页 → 改人设（主见程度）
+  await page.locator('.settings-nav button', { hasText: '伙伴' }).click()
+  await expect(page.locator('.settings-sec h3')).toContainText('人设')
+  await page.locator('.settings-sec label', { hasText: '有主见' }).locator('select').selectOption('opinionated')
+
   // 切到引导页 → 把"想办法"设为重点（按钮变 on）
   await page.locator('.settings-nav button', { hasText: '引导' }).click()
   await expect(page.locator('.settings-sec h3')).toContainText('引导偏好')

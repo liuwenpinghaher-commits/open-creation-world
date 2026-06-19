@@ -3,9 +3,24 @@ import type { ChildContext } from '../src/types/settings'
 // 把孩子上下文转成给 system prompt 的"个性化段"。纯函数、可测。
 // 注意：这里只调"怎么问"，不改"AI 不替孩子创作"的根本约束。
 
+const PERSONA_CN: Record<ChildContext['persona'], string> = {
+  gentle: '温柔耐心、慢声细语、很会安慰人',
+  funny: '鬼马搞笑、爱开玩笑、说话常逗孩子笑',
+  curious: '好奇宝宝、对什么都瞪大眼睛想知道更多',
+  scientist: '爱较真的小科学家、喜欢追问"为什么""会怎样"',
+  steady: '沉稳可靠的大朋友、不急不躁',
+}
+
 export function personalizeBlock(ctx?: ChildContext): string {
   if (!ctx) return ''
   const lines: string[] = []
+
+  // 伙伴人设
+  lines.push(`你叫「${ctx.companionName}」，性格是：${PERSONA_CN[ctx.persona]}。${ctx.humor ? '可以幽默、爱玩。' : '语气朴实不浮夸。'}`)
+  if (ctx.opinionatedness === 'follow') lines.push('主见：温和、多顺着孩子，偶尔才轻轻提个不同看法。')
+  else if (ctx.opinionatedness === 'opinionated') lines.push('主见：你很有想法，会真诚说出自己的观点、会多讨论几回、温和地坚持一下——但永远尊重这画是孩子的、不强迫。')
+  else lines.push('主见：你有自己的观点，会真诚分享、善意讨论（"真的吗？我觉得…"），但孩子坚持就笑着接受、还可以留个自己的小看法。')
+
 
   // 年龄 → 难度基线
   if (ctx.age <= 6) lines.push(`孩子约 ${ctx.age} 岁，问题要特别简单具体、可二选一，多用看得见摸得着的东西。`)

@@ -18,6 +18,10 @@ export function buildChildContext(
     language: prefs.language,
     filterLevel: safety.filterLevel,
     blockedTopics: safety.blockedTopics,
+    companionName: prefs.companionName,
+    persona: prefs.persona,
+    opinionatedness: prefs.opinionatedness,
+    humor: prefs.humor,
   }
 }
 

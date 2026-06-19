@@ -12,6 +12,9 @@ export type ChildProfile = {
   createdAt: number
 }
 
+/** AI 伙伴的性格预设 */
+export type PersonaPreset = 'gentle' | 'funny' | 'curious' | 'scientist' | 'steady'
+
 export type GuidancePrefs = {
   dimensionWeights: Record<GuidanceDimension, number> // 1=常规，>1 多练
   pace: 'often' | 'balanced' | 'spacious' // 激发节奏：多引导↔多留白
@@ -22,6 +25,11 @@ export type GuidancePrefs = {
   sel: boolean // SEL 情绪社交轻引导
   language: string // 引导语言/方言
   lockSupport: 'auto' | 'high' | 'normal' // 支架：自适应或锁定
+  // —— 伙伴人设 ——
+  companionName: string // 伙伴名字
+  persona: PersonaPreset // 性格预设
+  opinionatedness: 'follow' | 'balanced' | 'opinionated' // 有主见程度：顺着↔均衡↔会讨论会坚持
+  humor: boolean // 幽默感
 }
 
 export type ContentSafety = {
@@ -43,6 +51,11 @@ export type ChildContext = {
   language: string
   filterLevel: ContentSafety['filterLevel']
   blockedTopics: string[]
+  // —— 伙伴人设 ——
+  companionName: string
+  persona: PersonaPreset
+  opinionatedness: GuidancePrefs['opinionatedness']
+  humor: boolean
 }
 
 /** Torrance 创造力四维 + 倾向标签 */
@@ -68,6 +81,10 @@ export function defaultPrefs(): GuidancePrefs {
     sel: false,
     language: '普通话',
     lockSupport: 'auto',
+    companionName: '神笔',
+    persona: 'curious',
+    opinionatedness: 'balanced',
+    humor: true,
   }
 }
 
