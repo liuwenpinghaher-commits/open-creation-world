@@ -8,6 +8,7 @@ const TURNS: CocreateResponse[] = [
     addShapes: [
       { id: 'cat_head', kind: 'ellipse', x: 0.2, y: 0.4, w: 0.1, h: 0.1, color: 'orange' },
       { id: 'cat_body', kind: 'ellipse', x: 0.2, y: 0.5, w: 0.14, h: 0.1, color: 'orange' },
+      { id: 'cat_tail', kind: 'line', points: [{ x: 0.27, y: 0.55 }, { x: 0.34, y: 0.5 }, { x: 0.36, y: 0.42 }], color: 'orange' },
     ],
     scenes: { append: [{ id: 's1', narration: '一只小猫出现啦。', actions: [{ shapeId: 'cat_head', do: 'enter', durationMs: 300 }] }] },
     story: { append: '从前有一只橘色的小猫。' },
@@ -73,6 +74,8 @@ test('完整故事创作：分镜在真实浏览器里渲染并演出，回放�
   // 第 1 拍：小猫
   await sendTurn(page, '画一只小猫')
   await expect.poll(() => shapeIds(page).then((ids) => ids.includes('shape:cat_head'))).toBe(true)
+  // 原生手绘 line（尾巴）也真实渲染、未被 tldraw 校验拒绝
+  await expect.poll(() => shapeIds(page).then((ids) => ids.includes('shape:cat_tail'))).toBe(true)
   await expect(page.locator('.story-strip')).toContainText('橘色的小猫')
 
   // 第 2 拍：皮球

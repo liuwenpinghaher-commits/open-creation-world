@@ -59,13 +59,14 @@ export function toTldrawShape(spec: SketchShapeSpec, canvas: Canvas): TldrawShap
     const w = Math.max(8, (spec.w ?? 0.12) * W)
     const h = Math.max(8, (spec.h ?? 0.12) * H)
     return {
+      // size:'m' + dash:'draw' → 与孩子手绘画笔同样的手绘描边风格（H1 统一风格）
       id, type: 'geo', x, y,
-      props: { geo: spec.kind, w, h, color, dash: 'draw', fill: 'none' },
+      props: { geo: spec.kind, w, h, color, dash: 'draw', fill: 'none', size: 'm' },
     }
   }
 
-  // line/arrow/draw 的 tldraw 原生格式版本敏感（draw 需要 segments.path 等，构造错会导致校验崩溃）。
-  // 为稳定起见，用点的包围盒近似成一个细椭圆；兼容 AI 用 points 或 x1/y1/x2/y2 两种写法；无点则跳过。
+  // line/arrow/draw → tldraw 原生 line 形状（dash:'draw' 手绘描边，与孩子画笔同源）。
+  // points 字典结构来自 tldraw v5 TLLineShapeProps 文档示例，可安全构造；兼容 points 或 x1y1x2y2。
   if (spec.kind === 'line' || spec.kind === 'arrow' || spec.kind === 'draw') {
     let pts = normPoints(spec.points)
     const s = spec as unknown as { x1?: number; y1?: number; x2?: number; y2?: number }
@@ -73,20 +74,17 @@ export function toTldrawShape(spec: SketchShapeSpec, canvas: Canvas): TldrawShap
       pts = [{ x: s.x1, y: s.y1 }, { x: s.x2, y: s.y2 }]
     }
     if (pts.length < 2) return null
-    const xs = pts.map((p) => p.x)
-    const ys = pts.map((p) => p.y)
-    const minX = Math.min(...xs)
-    const maxX = Math.max(...xs)
-    const minY = Math.min(...ys)
-    const maxY = Math.max(...ys)
+    // 原点取首点绝对坐标，其余点相对原点（line points 相对 shape x/y）
+    const x0 = ox + pts[0].x * W
+    const y0 = oy + pts[0].y * H
+    const points: Record<string, { id: string; index: string; x: number; y: number }> = {}
+    pts.forEach((p, i) => {
+      const k = `a${i + 1}`
+      points[k] = { id: k, index: k, x: (p.x - pts[0].x) * W, y: (p.y - pts[0].y) * H }
+    })
     return {
-      id, type: 'geo', x: ox + minX * W, y: oy + minY * H,
-      props: {
-        geo: 'ellipse',
-        w: Math.max(6, (maxX - minX) * W),
-        h: Math.max(6, (maxY - minY) * H),
-        color, dash: 'draw', fill: 'none',
-      },
+      id, type: 'line', x: x0, y: y0,
+      props: { color, dash: 'draw', size: 'm', spline: 'line', scale: 1, points },
     }
   }
 

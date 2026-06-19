@@ -52,7 +52,8 @@ export function useVoice() {
       current.current.audio.pause()
       URL.revokeObjectURL(current.current.url)
     }
-    const url = URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }))
+    const type = resp.headers.get('content-type')?.split(';')[0] || 'audio/wav'
+    const url = URL.createObjectURL(new Blob([buf], { type }))
     const audio = new Audio(url)
     current.current = { audio, url }
     await audio.play()

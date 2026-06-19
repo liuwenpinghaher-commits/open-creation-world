@@ -36,8 +36,8 @@ app.post('/api/stt', async (req, res) => {
 
 app.post('/api/tts', async (req, res) => {
   try {
-    const audio = await synthesize((req.body as { text: string }).text)
-    res.setHeader('Content-Type', 'audio/wav')
+    const { audio, mime } = await synthesize((req.body as { text: string }).text)
+    res.setHeader('Content-Type', mime)
     res.send(audio)
   } catch (e) {
     fail(res, 'tts', e)

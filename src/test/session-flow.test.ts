@@ -75,9 +75,9 @@ describe('完整共创会话流程（确定性）', () => {
       { width: 1000, height: 700, offsetX: 200, offsetY: 100 }
     )
     expect(shape).not.toBeNull()
-    expect(shape!.type).toBe('geo') // 线条类用包围盒椭圆近似
-    expect(shape!.x).toBe(500) // offsetX 200 + minX 0.3*1000
-    expect(shape!.y).toBe(380) // offsetY 100 + minY 0.4*700
+    expect(shape!.type).toBe('line') // 线条类用原生手绘 line
+    expect(shape!.x).toBe(500) // offsetX 200 + 首点 0.3*1000
+    expect(shape!.y).toBe(380) // offsetY 100 + 首点 0.4*700
   })
 
   it('未知/装饰类 shape 不会让流程崩溃（返回 null 被跳过）', () => {

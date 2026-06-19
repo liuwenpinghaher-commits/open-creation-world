@@ -71,14 +71,15 @@ describe.runIf(RUN)('百炼真实业务集成测试（RUN_REAL_API=1）', () => 
     }
   }, 60000)
 
-  it('TTS：文本 → 非空 wav 字节', async () => {
-    const buf = await synthesize('小马飞起来了，真好看')
-    expect(buf.length).toBeGreaterThan(1000)
+  it('TTS：文本 → 非空音频字节 + 合理 mime', async () => {
+    const { audio, mime } = await synthesize('小马飞起来了，真好看')
+    expect(audio.length).toBeGreaterThan(1000)
+    expect(mime).toMatch(/^audio\//)
   }, 60000)
 
   it('语音回环：TTS → STT 能还原关键词', async () => {
-    const buf = await synthesize('小白兔在草地上蹦蹦跳跳')
-    const text = await transcribe(buf, 'audio/wav')
+    const { audio, mime } = await synthesize('小白兔在草地上蹦蹦跳跳')
+    const text = await transcribe(audio, mime)
     expect(text).toMatch(/兔|草|跳/)
   }, 90000)
 

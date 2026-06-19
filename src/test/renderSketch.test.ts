@@ -18,17 +18,20 @@ describe('toTldrawShape', () => {
     expect(out!.props.h).toBe(80)
   })
 
-  it('draw 用 [[x,y]] 格式 points（且无 x/y）也能渲染，不会 NaN', () => {
+  it('draw 用 [[x,y]] 格式 points（且无 x/y）渲染为原生手绘 line，不会 NaN', () => {
     const out = toTldrawShape(
       { id: 'wing', kind: 'draw', points: [[0.3, 0.4], [0.2, 0.3], [0.25, 0.2]] } as never,
       CANVAS
     )
     expect(out).not.toBeNull()
-    expect(out!.type).toBe('geo') // 线条类用包围盒椭圆近似（避免脆弱的 draw 原生格式）
-    expect(out!.x).toBe(200) // bbox 左上 minX=0.2 → 200
-    expect(out!.y).toBe(160) // minY=0.2 → 160
+    expect(out!.type).toBe('line') // 线条类用 tldraw 原生 line + dash:draw（手绘，与孩子画笔同源）
+    expect(out!.x).toBe(300) // 原点=首点 0.3*1000
+    expect(out!.y).toBe(320) // 0.4*800
+    expect(out!.props.dash).toBe('draw')
+    const pts = out!.props.points as Record<string, { x: number; y: number }>
+    expect(pts.a1).toEqual({ id: 'a1', index: 'a1', x: 0, y: 0 }) // 首点相对自身为 0,0
+    expect(Object.keys(pts)).toHaveLength(3)
     expect(Number.isNaN(out!.x)).toBe(false)
-    expect(out!.props.geo).toBe('ellipse')
   })
 
   it('非法颜色回退 black，别名映射', () => {

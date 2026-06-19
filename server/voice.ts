@@ -17,9 +17,10 @@ async function fetchRetry(url: string, init: RequestInit, tries = 3): Promise<Re
   throw lastErr ?? new Error('fetch failed')
 }
 
-/** 文本 → 语音字节（wav）。qwen-tts 返回音频 url，再下载其字节。 */
-export async function synthesize(text: string): Promise<Buffer> {
-  if (!text.trim()) return Buffer.alloc(0)
+/** 文本 → 语音字节 + 真实 MIME。qwen-tts 返回音频 url，再下载其字节并带回上游 content-type。 */
+export async function synthesize(text: string): Promise<{ audio: Buffer; mime: string }> {
+  const empty = { audio: Buffer.alloc(0), mime: 'audio/wav' }
+  if (!text.trim()) return empty
   const resp = await fetchRetry(GEN_URL, {
     method: 'POST',
     headers: {
@@ -31,10 +32,19 @@ export async function synthesize(text: string): Promise<Buffer> {
   if (!resp.ok) throw new Error(`tts error ${resp.status}: ${await resp.text()}`)
   const data = await resp.json()
   const url: string | undefined = data?.output?.audio?.url
-  if (!url) return Buffer.alloc(0)
+  if (!url) return empty
   const audioResp = await fetchRetry(url, {})
-  if (!audioResp.ok) return Buffer.alloc(0)
-  return Buffer.from(await audioResp.arrayBuffer())
+  if (!audioResp.ok) return empty
+  const mime = audioResp.headers.get('content-type')?.split(';')[0] || guessMimeFromUrl(url)
+  return { audio: Buffer.from(await audioResp.arrayBuffer()), mime }
+}
+
+function guessMimeFromUrl(url: string): string {
+  const u = url.toLowerCase()
+  if (u.includes('.mp3')) return 'audio/mpeg'
+  if (u.includes('.ogg')) return 'audio/ogg'
+  if (u.includes('.m4a') || u.includes('.aac')) return 'audio/mp4'
+  return 'audio/wav'
 }
 
 /** 语音字节 → 文本。base64 data uri 走 qwen3-asr-flash（OpenAI 兼容 input_audio）。 */
