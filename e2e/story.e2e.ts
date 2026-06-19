@@ -68,6 +68,9 @@ test('创作伙伴：AI 只激发不替画，孩子指定后让"孩子自己的�
   await page.goto('/')
   await expect.poll(async () => page.evaluate(() => !!(window as unknown as { __editor?: unknown }).__editor)).toBe(true)
 
+  // P10 首屏空状态引导
+  await expect(page.locator('.empty-hint')).toBeVisible()
+
   // 孩子画一只"龙"（一笔）
   await childDraws(page, 'dragon', 300, 300)
   expect(await shapeIds(page)).toEqual(['shape:dragon'])
@@ -75,6 +78,8 @@ test('创作伙伴：AI 只激发不替画，孩子指定后让"孩子自己的�
   // 第 1 拍：AI 不命名、只问——气泡出现激发；AI 没有往画布加任何东西
   await sendTurn(page, '你看我画的')
   await expect(page.locator('.partner-bubble')).toContainText('这是什么')
+  await expect(page.locator('.heard')).toContainText('我听到你说：你看我画的') // P4 语音回显
+  await expect(page.locator('.empty-hint')).toHaveCount(0) // 开聊后空状态消失
   expect(await shapeIds(page)).toEqual(['shape:dragon']) // AI 没作画
 
   // 第 2 拍：孩子命名+扩展，AI 用 PEER 肯定+扩展+追问因果
@@ -105,6 +110,10 @@ test('创作伙伴：AI 只激发不替画，孩子指定后让"孩子自己的�
   await expect(page.locator('.journal-item.current')).toContainText('开口 3 次')
   await expect(page.locator('.journal-item.current')).toContainText('给它起名小火')
   await expect(page.locator('.journal-item.current .review-dims')).toContainText('想象力')
+  // P3 故事回放：展开看这次的对话
+  await page.locator('.journal-item.current button', { hasText: '看这次聊了什么' }).click()
+  await expect(page.locator('.journal-dialog')).toContainText('它叫小火')
+  await expect(page.locator('.journal-dialog')).toContainText('伙伴')
   await page.locator('.review-close').click()
   await expect(page.locator('.review-card')).toHaveCount(0)
 
@@ -139,4 +148,52 @@ test('豪华兑现：AnimatedDrawings 可用时播放绑骨动画视频', async 
   // 出现绑骨动画视频，且 src 指向上游返回的地址
   const video = page.locator('.figure-video')
   await expect(video).toHaveAttribute('src', 'http://example.test/anim.mp4', { timeout: 8000 })
+})
+
+test('防假兑现：画布空时要求"飞"，不谎称它动了，改引导先画', async ({ page }) => {
+  await page.route('**/api/partner', (route) => route.fulfill({
+    status: 200, contentType: 'application/json',
+    body: JSON.stringify({ noticed: '', dimension: 'imagination', crowd: 'open', provoke: '看它飞起来啦！', fulfill: { behavior: 'fly', trigger: '让它飞' } }),
+  }))
+  await page.route('**/api/tts', (route) => route.fulfill({ status: 200, contentType: 'audio/wav', body: '' }))
+  await page.route('**/api/animate-figure', (route) => route.fulfill({ status: 501, contentType: 'application/json', body: '{}' }))
+
+  await page.goto('/')
+  await expect.poll(async () => page.evaluate(() => !!(window as unknown as { __editor?: unknown }).__editor)).toBe(true)
+
+  // 不画任何东西，直接要求"飞"
+  await sendTurn(page, '让它飞')
+  // 画布仍然空；气泡说的是"先画"，不是模型的"看它飞起来啦"
+  expect(await shapeIds(page)).toEqual([])
+  await expect(page.locator('.partner-bubble')).toContainText('先在纸上画')
+  await expect(page.locator('.partner-bubble')).not.toContainText('飞起来啦')
+})
+
+test('对象定位：选中一个，兑现只动选中的那个', async ({ page }) => {
+  await page.route('**/api/partner', (route) => route.fulfill({
+    status: 200, contentType: 'application/json',
+    body: JSON.stringify({ noticed: '', dimension: 'imagination', crowd: 'open', provoke: '飞咯！', fulfill: { behavior: 'fly', trigger: '让它飞' } }),
+  }))
+  await page.route('**/api/tts', (route) => route.fulfill({ status: 200, contentType: 'audio/wav', body: '' }))
+  await page.route('**/api/animate-figure', (route) => route.fulfill({ status: 501, contentType: 'application/json', body: '{}' }))
+
+  await page.goto('/')
+  await expect.poll(async () => page.evaluate(() => !!(window as unknown as { __editor?: unknown }).__editor)).toBe(true)
+  await childDraws(page, 'bird', 200, 300)
+  await childDraws(page, 'tree', 600, 300)
+  // 只选中 bird
+  await page.evaluate(() => {
+    const ed = (window as unknown as { __editor?: { setSelectedShapes: (ids: string[]) => void } }).__editor
+    ed?.setSelectedShapes(['shape:bird'])
+  })
+
+  const treeX0 = await shapeX(page, 'shape:tree')
+  await sendTurn(page, '让它飞')
+  // bird 动过（飞行中 x 变化）；tree 始终不动
+  await expect.poll(async () => {
+    const x = await shapeX(page, 'shape:bird')
+    return x != null && Math.abs(x - 200) > 30
+  }, { timeout: 8000 }).toBe(true)
+  const treeX1 = await shapeX(page, 'shape:tree')
+  expect(Math.abs((treeX1 as number) - (treeX0 as number))).toBeLessThan(0.5) // tree 没被动
 })

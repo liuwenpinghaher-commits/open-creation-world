@@ -98,9 +98,13 @@ export async function callPartner(input: {
   childUtterance: string
   history: { role: 'child' | 'partner'; text: string }[]
   move: { dimension: GuidanceDimension; crowd: CrowdType }
+  hasDrawing?: boolean
 }): Promise<PartnerResponse> {
+  const canvasNote = input.hasDrawing === false
+    ? '\n【画布上现在还没有任何东西。不要假设有可动的角色，更不要设置 fulfill 说"它动起来了"——先引导孩子画点东西。】'
+    : ''
   const userContent: Array<Record<string, unknown>> = [
-    { type: 'text', text: input.childUtterance || '（孩子在画画，还没说话）' },
+    { type: 'text', text: (input.childUtterance || '（孩子在画画，还没说话）') + canvasNote },
   ]
   if (input.imageDataUrl && input.imageDataUrl.startsWith('data:image')) {
     userContent.push({ type: 'image_url', image_url: { url: input.imageDataUrl } })

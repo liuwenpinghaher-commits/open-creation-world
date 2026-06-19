@@ -32,10 +32,14 @@ function isWeak(u: string): boolean {
   return STUCK_WORDS.some((w) => t === w) || (t.length <= 4 && STUCK_WORDS.some((w) => t.includes(w)))
 }
 
-/** 从孩子最近的发言判断投入状态：卡住（沉默/很短/"不知道"）/ 投入（说得长）/ 一般 */
-export function readEngagement(childUtterances: string[]): Engagement {
+/**
+ * 判断孩子投入状态：卡住（沉默/很短/"不知道"）/ 投入（说得长 或 在埋头画）/ 一般。
+ * drewThisTurn=true 表示这一拍孩子在画布上动手了——埋头画也是投入，不应被当成卡住。
+ */
+export function readEngagement(childUtterances: string[], drewThisTurn = false): Engagement {
   const last = childUtterances[childUtterances.length - 1]
-  if (last === undefined) return 'normal'
+  if (last === undefined) return drewThisTurn ? 'flowing' : 'normal'
+  if (drewThisTurn) return last.trim().length >= 12 ? 'flowing' : 'normal' // 画了就不算卡住
   if (isWeak(last)) return 'stuck'
   if (last.trim().length >= 12) return 'flowing'
   const prev = childUtterances[childUtterances.length - 2]

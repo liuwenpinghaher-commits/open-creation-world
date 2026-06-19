@@ -5,6 +5,7 @@ export async function requestPartner(payload: {
   childUtterance: string
   history: { role: 'child' | 'partner'; text: string }[]
   move: GuidanceMove
+  hasDrawing?: boolean
 }): Promise<PartnerResponse> {
   const resp = await fetch('/api/partner', {
     method: 'POST',

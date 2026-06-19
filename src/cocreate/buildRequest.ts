@@ -6,11 +6,13 @@ export function buildRequest(input: {
   childUtterance: string
   history: SessionState['dialog']
   move: GuidanceMove
+  hasDrawing?: boolean
 }) {
   return {
     imageDataUrl: input.imageDataUrl,
     childUtterance: input.childUtterance,
     history: input.history.slice(-8),
     move: input.move,
+    hasDrawing: !!input.hasDrawing,
   }
 }

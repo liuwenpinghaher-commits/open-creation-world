@@ -51,6 +51,12 @@ describe('引导引擎：节奏自适应', () => {
     expect(readEngagement(['一只红色的龙'])).toBe('normal')
   })
 
+  it('这一拍在画画时，话很短也不算卡住（埋头画也是投入）', () => {
+    expect(readEngagement(['嗯'], true)).toBe('normal') // 画了就不算卡住
+    expect(readEngagement(['它会飞还会喷火住在城堡里好厉害'], true)).toBe('flowing') // 又画又说很多
+    expect(readEngagement(['嗯'], false)).toBe('stuck') // 没画又只说"嗯"才算卡住
+  })
+
   it('卡住时降到最具体维度 + 具体 Wh 提问 + 高支架', () => {
     const m = nextMove(['imagination', 'problem_solving'], 'stuck')
     expect(m.dimension).toBe('observe_express') // 最容易、最具体

@@ -5,6 +5,7 @@ import { SketchCanvas } from './sketch/SketchCanvas'
 import { runBehavior } from './fulfill/behaviors'
 import { tryFigureAnimation } from './fulfill/figure'
 import { nextMove, readEngagement } from './guidance/engine'
+import { fulfillDecision } from './guidance/turn'
 import { useVoice } from './voice/useVoice'
 import { requestPartner } from './cocreate/cocreateClient'
 import { buildRequest } from './cocreate/buildRequest'
@@ -29,6 +30,8 @@ export default function App() {
   const [journal, setJournal] = useState<WorkRecord[] | null>(null) // 非 null 即打开成长册
   const [currentWorkId, setCurrentWorkId] = useState('') // 渲染用（ref 在事件里读，state 给渲染读）
   const [figureVideo, setFigureVideo] = useState<string | null>(null) // 豪华兑现：AnimatedDrawings 视频
+  const [heard, setHeard] = useState('') // P4：回显识别到的孩子语音
+  const [expandedWork, setExpandedWork] = useState<string | null>(null) // 成长册里展开看对话的作品
   const { start, stop, speak } = useVoice()
 
   const sessionRef = useRef(session)
@@ -36,6 +39,7 @@ export default function App() {
   const restoredRef = useRef(false)
   const dirtyRef = useRef(false) // 画布自上次感知后是否有改动（决定是否重新发图）
   const workIdRef = useRef<string>('') // 当前正在画的作品 id
+  const suppressSaveRef = useRef(false) // 兑现动画期间挂起自动保存（避免动画帧刷屏/误存）
 
   function saveNow(s: SessionState = sessionRef.current) {
     const editor = editorRef.current
@@ -66,6 +70,7 @@ export default function App() {
     let timer = 0
     e.store.listen(
       () => {
+        if (suppressSaveRef.current) return // 兑现动画帧不算孩子改画，跳过
         dirtyRef.current = true
         window.clearTimeout(timer)
         timer = window.setTimeout(() => saveNow(), 1000)
@@ -83,6 +88,7 @@ export default function App() {
     setCurrentId(id)
     setCurrentWorkId(id)
     setSession(emptySession())
+    setHeard('')
     dirtyRef.current = false
     if (editor) {
       const ids = [...editor.getCurrentPageShapeIds()]
@@ -140,36 +146,42 @@ export default function App() {
     const editor = editorRef.current
     if (!editor) return
 
-    const imageDataUrl = dirtyRef.current ? await exportCanvasPng() : undefined
+    setHeard(utterance) // P4：回显"我听到你说…"，听错可纠正
+    const drew = dirtyRef.current // 这一拍孩子是否动过笔
+    const shapeCount = editor.getCurrentPageShapeIds().size
+    const imageDataUrl = drew ? await exportCanvasPng() : undefined
     if (imageDataUrl) dirtyRef.current = false
 
-    // 节奏自适应：结合孩子刚说的这句，判断是否卡住，决定降难度+加支架
+    // 节奏自适应：结合孩子这句 + 是否在画，判断卡住/投入，决定降难度+加支架
     const childUtts = sessionRef.current.dialog.filter((d) => d.role === 'child').map((d) => d.text)
-    const move = nextMove(sessionRef.current.guidance, readEngagement([...childUtts, utterance]))
-    const res = await requestPartner(buildRequest({ imageDataUrl, childUtterance: utterance, history: sessionRef.current.dialog, move }))
+    const move = nextMove(sessionRef.current.guidance, readEngagement([...childUtts, utterance], drew))
+    const res = await requestPartner(buildRequest({ imageDataUrl, childUtterance: utterance, history: sessionRef.current.dialog, move, hasDrawing: shapeCount > 0 }))
 
-    const merged = applyPartner(sessionRef.current, res, utterance)
+    // 防"假兑现"：要求兑现但画布空 → 不动画、改说引导先画。说什么就存什么（说=气泡=成长册）
+    const decision = fulfillDecision(res, shapeCount)
+    const merged = applyPartner(sessionRef.current, res, utterance, decision.line)
     setSession(merged)
 
-    const line = [res.peer?.evaluate, res.peer?.expand, res.provoke].filter(Boolean).join(' ')
-
-    // 偶发兑现：先试 AnimatedDrawings 绑骨动画(豪华档)，不可用则降级为轻量木偶动画——动的都是孩子自己的画
-    if (res.fulfill) {
+    if (decision.behavior) {
       const png = await exportCanvasPng()
       const video = png ? await tryFigureAnimation(png) : null
       if (video) {
         setFigureVideo(video)
-        await speak(line)
+        await speak(decision.line)
       } else {
-        const ids = [...editor.getCurrentPageShapeIds()].map(String)
-        // 讲述与木偶动画并行，省掉一段串行等待
+        // P1：优先只动孩子选中的对象；没选则整张画。P5：兑现期间挂起自动保存。
+        const sel = [...editor.getSelectedShapeIds()].map(String)
+        const ids = sel.length ? sel : [...editor.getCurrentPageShapeIds()].map(String)
+        suppressSaveRef.current = true
         await Promise.all([
-          runBehavior(editor, res.fulfill.behavior, ids, viewport(editor)).catch((err) => console.warn('fulfill failed:', err)),
-          speak(line),
+          runBehavior(editor, decision.behavior, ids, viewport(editor)).catch((err) => console.warn('fulfill failed:', err)),
+          speak(decision.line),
         ])
+        suppressSaveRef.current = false
+        dirtyRef.current = false // 兑现只是表演（已归位），不算孩子改了画，下一拍不必重发图
       }
     } else {
-      await speak(line)
+      await speak(decision.line)
     }
     saveNow(merged)
   }
@@ -245,7 +257,21 @@ export default function App() {
                       {sum.produced.length ? (
                         <ul className="review-list">{sum.produced.slice(-3).map((p, i) => <li key={i}>{p}</li>)}</ul>
                       ) : null}
+                      {expandedWork === w.id && w.session.dialog.length ? (
+                        <div className="journal-dialog">
+                          {w.session.dialog.map((d, i) => (
+                            <p key={i} className={d.role === 'child' ? 'dlg-child' : 'dlg-partner'}>
+                              <b>{d.role === 'child' ? '孩子' : '伙伴'}：</b>{d.text}
+                            </p>
+                          ))}
+                        </div>
+                      ) : null}
                       <div className="journal-actions">
+                        {w.session.dialog.length ? (
+                          <button type="button" onClick={() => setExpandedWork(expandedWork === w.id ? null : w.id)}>
+                            {expandedWork === w.id ? '收起' : '看这次聊了什么'}
+                          </button>
+                        ) : null}
                         {w.id === currentWorkId ? null : <button type="button" onClick={() => openWork(w.id)}>打开</button>}
                         <button type="button" className="journal-del" onClick={() => removeWork(w.id)}>删除</button>
                       </div>
@@ -261,14 +287,26 @@ export default function App() {
 
       {figureVideo ? (
         <div className="figure-mask" onClick={() => setFigureVideo(null)}>
-          <video className="figure-video" src={figureVideo} autoPlay playsInline onEnded={() => setFigureVideo(null)} />
+          <video
+            className="figure-video"
+            src={figureVideo}
+            autoPlay
+            playsInline
+            onEnded={() => setFigureVideo(null)}
+            onError={() => setFigureVideo(null)}
+          />
         </div>
+      ) : null}
+
+      {session.dialog.length === 0 && phase === 'idle' ? (
+        <div className="empty-hint">在纸上画点什么，或者点下面的按钮和我说说话吧～</div>
       ) : null}
 
       {lastPartner ? <div className="partner-bubble">{lastPartner.text}</div> : null}
       {phase === 'thinking' ? <div className="thinking-overlay">✨ 我在想…</div> : null}
 
       <div className="talk-bar">
+        {heard ? <span className="heard">我听到你说：{heard}</span> : null}
         {hint ? <span className="hint">{hint}</span> : null}
         <button className="talk-btn" type="button" onClick={handleMic} disabled={phase === 'thinking'}>
           {micLabel}

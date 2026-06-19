@@ -232,6 +232,51 @@ body,
   50% { opacity: 1; transform: translate(-50%, -50%) scale(1.06); }
 }
 
+.heard {
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  margin-bottom: 48px;
+  white-space: nowrap;
+  max-width: 80vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  background: rgba(255, 255, 255, 0.95);
+  color: #5a6675;
+  padding: 6px 14px;
+  border-radius: 999px;
+  font-size: 14px;
+  box-shadow: 0 3px 12px rgb(40 50 66 / 12%);
+}
+
+.empty-hint {
+  position: absolute;
+  top: 42%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: rgba(255, 255, 255, 0.9);
+  color: #5a6675;
+  padding: 14px 22px;
+  border-radius: 16px;
+  font-size: 18px;
+  box-shadow: 0 6px 22px rgb(40 50 66 / 12%);
+  z-index: 9;
+  pointer-events: none;
+}
+
+.journal-dialog {
+  margin-top: 10px;
+  padding: 10px 12px;
+  background: #f7f9fc;
+  border-radius: 12px;
+  max-height: 200px;
+  overflow-y: auto;
+}
+.journal-dialog p { margin: 4px 0; font-size: 14px; line-height: 1.5; }
+.journal-dialog .dlg-child { color: #2a4a8a; }
+.journal-dialog .dlg-partner { color: #3a6b4a; }
+
 .hint {
   position: absolute;
   bottom: 100%;
