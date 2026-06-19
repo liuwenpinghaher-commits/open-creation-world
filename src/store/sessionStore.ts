@@ -1,7 +1,7 @@
-import type { CocreateResponse, SessionState, SketchShapeSpec } from '../types/cocreate'
+import type { CocreateResponse, Scene, SessionState, SketchShapeSpec } from '../types/cocreate'
 
 export function emptySession(): SessionState {
-  return { shapes: [], story: [], dialog: [] }
+  return { shapes: [], scenes: [], story: [], dialog: [] }
 }
 
 let storyCounter = 0
@@ -33,6 +33,13 @@ export function applyResponse(
     }
   }
 
+  let scenes: Scene[] = [...state.scenes]
+  if (res.scenes?.append) scenes.push(...res.scenes.append)
+  if (res.scenes?.rewrite) {
+    const { from, scenes: repl } = res.scenes.rewrite
+    scenes = scenes.slice(0, Math.max(0, from)).concat(repl)
+  }
+
   let story = [...state.story]
   if (res.story?.append) story.push({ id: nextStoryId(), text: res.story.append })
   if (res.story?.rewrite) {
@@ -44,5 +51,5 @@ export function applyResponse(
   if (childUtterance) dialog.push({ role: 'child', text: childUtterance })
   if (res.speak) dialog.push({ role: 'system', text: res.speak })
 
-  return { shapes, story, dialog }
+  return { shapes, scenes, story, dialog }
 }

@@ -4,6 +4,7 @@ export function useVoice() {
   const [recording, setRecording] = useState(false)
   const chunks = useRef<Blob[]>([])
   const recorder = useRef<MediaRecorder | null>(null)
+  const current = useRef<{ audio: HTMLAudioElement; url: string } | null>(null)
 
   const start = useCallback(async () => {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
@@ -46,8 +47,15 @@ export function useVoice() {
     if (!resp.ok) return
     const buf = await resp.arrayBuffer()
     if (buf.byteLength === 0) return // TTS 无输出时跳过
+    // 停掉并释放上一段，避免多段旁白叠播 + objectURL 泄漏
+    if (current.current) {
+      current.current.audio.pause()
+      URL.revokeObjectURL(current.current.url)
+    }
     const url = URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }))
-    await new Audio(url).play()
+    const audio = new Audio(url)
+    current.current = { audio, url }
+    await audio.play()
   }, [])
 
   return { recording, start, stop, speak }

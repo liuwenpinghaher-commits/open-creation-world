@@ -62,7 +62,13 @@ describe.runIf(RUN)('百炼真实业务集成测试（RUN_REAL_API=1）', () => 
       const shape = toTldrawShape(sp, { width: 1000, height: 700 })
       if (shape) expect(Number.isNaN(shape.x)).toBe(false)
     }
-    for (const a of res.animation ?? []) expect(typeof a.shapeId).toBe('string')
+    for (const sc of res.scenes?.append ?? []) {
+      expect(Array.isArray(sc.actions)).toBe(true)
+      for (const a of sc.actions) {
+        expect(typeof a.shapeId).toBe('string')
+        expect(['enter', 'disappear', 'moveTo', 'scaleTo', 'rotateTo', 'wobble']).toContain(a.do)
+      }
+    }
   }, 60000)
 
   it('TTS：文本 → 非空 wav 字节', async () => {
@@ -76,12 +82,30 @@ describe.runIf(RUN)('百炼真实业务集成测试（RUN_REAL_API=1）', () => 
     expect(text).toMatch(/兔|草|跳/)
   }, 90000)
 
-  it('完整多轮共创：每轮响应都可归约并产出可渲染内容', async () => {
+  it('完整多轮共创：分镜剧情演出（引用有效 + 出现移动/互动动作）', async () => {
     let s = emptySession()
-    const turns = ['我画了一只小猫', '给小猫画一个皮球', '让小猫去追皮球']
+    const turns = ['我画了一只小猫', '给小猫画一个皮球', '让小猫跑过去追皮球，追到就把皮球抱住']
+    let sawMotion = false
+    let sawValidRef = false
+
     for (const t of turns) {
-      const res = await callModel({ imageDataUrl: makeSketchPng(), childUtterance: t, history: s.dialog })
+      const res = await callModel({
+        imageDataUrl: makeSketchPng(),
+        childUtterance: t,
+        history: s.dialog,
+        shapes: s.shapes.map((x) => ({ id: x.id, kind: x.kind })),
+      })
       expect(res.speak || res.askChild).toBeTruthy()
+
+      // 本拍可引用的 id = 已有 + 本拍新建
+      const knownIds = new Set([...s.shapes.map((x) => x.id), ...(res.addShapes ?? []).map((x) => x.id)])
+      for (const sc of res.scenes?.append ?? []) {
+        for (const a of sc.actions) {
+          if (['moveTo', 'scaleTo', 'rotateTo'].includes(a.do)) sawMotion = true
+          if (knownIds.has(a.shapeId)) sawValidRef = true
+        }
+      }
+
       s = applyResponse(s, res, t)
       for (const sp of res.addShapes ?? []) {
         const shape = toTldrawShape(sp, { width: 1000, height: 700 })
@@ -91,6 +115,10 @@ describe.runIf(RUN)('百炼真实业务集成测试（RUN_REAL_API=1）', () => 
         }
       }
     }
+
     expect(s.dialog.length).toBeGreaterThanOrEqual(turns.length)
-  }, 150000)
+    expect(s.scenes.length).toBeGreaterThan(0) // 真的排了分镜
+    expect(sawValidRef).toBe(true) // 分镜动作引用到真实存在的图形
+    expect(sawMotion).toBe(true) // 至少出现一次移动/缩放/旋转（剧情演出）
+  }, 180000)
 })

@@ -46,4 +46,22 @@ describe('applyResponse', () => {
     const next = applyResponse(s, { understanding: '', story: { rewrite: { from: 1, text: 'B2' } }, speak: '' }, '改第二段')
     expect(next.story.map((e) => e.text)).toEqual(['A', 'B2'])
   })
+
+  it('scenes.append 追加分镜，scenes.rewrite 从指定镜起改写', () => {
+    let s = applyResponse(emptySession(), {
+      understanding: '', speak: '',
+      scenes: { append: [{ id: 'a', actions: [{ shapeId: 'dog', do: 'moveTo', x: 0.5, y: 0.5 }] }] },
+    }, '1')
+    s = applyResponse(s, {
+      understanding: '', speak: '',
+      scenes: { append: [{ id: 'b', actions: [{ shapeId: 'bone', do: 'disappear' }] }] },
+    }, '2')
+    expect(s.scenes.map((x) => x.id)).toEqual(['a', 'b'])
+
+    const rewritten = applyResponse(s, {
+      understanding: '', speak: '',
+      scenes: { rewrite: { from: 1, scenes: [{ id: 'b2', actions: [{ shapeId: 'dog', do: 'wobble' }] }] } },
+    }, '让它跳高点')
+    expect(rewritten.scenes.map((x) => x.id)).toEqual(['a', 'b2'])
+  })
 })

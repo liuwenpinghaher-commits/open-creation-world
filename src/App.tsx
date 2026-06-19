@@ -3,14 +3,14 @@ import { toRichText, type Editor } from 'tldraw'
 import './App.css'
 import { SketchCanvas } from './sketch/SketchCanvas'
 import { toTldrawShape } from './sketch/renderSketch'
-import { runAnimation } from './animation/runAnimation'
+import { playScenes, replayAll } from './animation/playScenes'
 import { useVoice } from './voice/useVoice'
 import { requestCocreate } from './cocreate/cocreateClient'
 import { buildRequest } from './cocreate/buildRequest'
 import { applyResponse, emptySession } from './store/sessionStore'
 import type { SessionState } from './types/cocreate'
 
-type Phase = 'idle' | 'recording' | 'thinking'
+type Phase = 'idle' | 'recording' | 'thinking' | 'replaying'
 
 export default function App() {
   const editorRef = useRef<Editor | null>(null)
@@ -39,7 +39,7 @@ export default function App() {
     const editor = editorRef.current
     if (!editor) return
     const imageDataUrl = await exportCanvasPng()
-    const payload = buildRequest({ imageDataUrl, childUtterance: utterance, history: session.dialog })
+    const payload = buildRequest({ imageDataUrl, childUtterance: utterance, history: session.dialog, shapes: session.shapes })
     const res = await requestCocreate(payload)
 
     const vp = editor.getViewportPageBounds()
@@ -75,21 +75,42 @@ export default function App() {
       }
     }
 
-    if (res.animation?.length) {
+    // 合并分镜后，从本拍新增/改写的那一镜起演出（旁白同步用 TTS 念出）
+    const fromIndex = res.scenes?.rewrite ? res.scenes.rewrite.from : session.scenes.length
+    const merged = applyResponse(session, res, utterance)
+    setSession(merged)
+
+    if (merged.scenes.length > fromIndex) {
       try {
-        await runAnimation(editor, res.animation, canvas)
+        await playScenes(editor, merged.scenes, fromIndex, canvas, { onNarrate: (t) => void speak(t) })
       } catch (err) {
-        console.warn('animation failed:', err)
+        console.warn('play scenes failed:', err)
       }
     }
-
-    setSession((s) => applyResponse(s, res, utterance))
     await speak(res.speak || res.askChild || '')
+  }
+
+  async function handleReplay() {
+    const editor = editorRef.current
+    if (!editor || phase !== 'idle' || session.scenes.length === 0) return
+    const vp = editor.getViewportPageBounds()
+    const ok = !!vp && vp.w > 50 && vp.h > 50
+    const canvas = ok
+      ? { width: vp.w, height: vp.h, offsetX: vp.x, offsetY: vp.y }
+      : { width: 1000, height: 700, offsetX: 0, offsetY: 0 }
+    setPhase('replaying')
+    try {
+      await replayAll(editor, session.scenes, canvas, { onNarrate: (t) => void speak(t) })
+    } catch (err) {
+      console.warn('replay failed:', err)
+    } finally {
+      setPhase('idle')
+    }
   }
 
   // 点击切换录音：点一下开始，再点一下结束并识别（避免“按住松开”在按钮外松手停不下来）
   async function handleMic() {
-    if (phase === 'thinking') return
+    if (phase === 'thinking' || phase === 'replaying') return
     if (phase === 'recording') {
       setPhase('thinking')
       try {
@@ -115,7 +136,7 @@ export default function App() {
   }
 
   function submitTyped() {
-    if (phase === 'thinking' || !typed.trim()) return
+    if (phase === 'thinking' || phase === 'replaying' || !typed.trim()) return
     const t = typed.trim()
     setTyped('')
     setPhase('thinking')
@@ -137,17 +158,35 @@ export default function App() {
     if (ids.length) ed.deleteShapes(ids)
   }
 
-  const micLabel = phase === 'thinking' ? '✏️ 我在想…' : phase === 'recording' ? '🔴 说完了，点我' : '🎙️ 点我说话'
+  const micLabel =
+    phase === 'thinking' ? '✏️ 我在想…'
+    : phase === 'replaying' ? '🎬 演出中…'
+    : phase === 'recording' ? '🔴 说完了，点我'
+    : '🎙️ 点我说话'
 
   return (
     <div className="shenbi">
-      <SketchCanvas onMount={(e) => (editorRef.current = e)} />
+      <SketchCanvas
+        onMount={(e) => {
+          editorRef.current = e
+          // 仅 dev：暴露给端到端测试驱动（生产构建不包含 import.meta.env.DEV 分支）
+          if (import.meta.env.DEV) (window as unknown as { __editor?: Editor }).__editor = e
+        }}
+      />
 
       <div className="kid-tools">
         <button type="button" title="画笔" onClick={() => setTool('draw')}>🖌️</button>
         <button type="button" title="橡皮" onClick={() => setTool('eraser')}>🧽</button>
         <button type="button" title="撤销" onClick={undo}>↩️</button>
         <button type="button" title="全部擦掉" onClick={clearCanvas}>🗑️</button>
+        <button
+          type="button"
+          title="再演一遍"
+          onClick={handleReplay}
+          disabled={phase !== 'idle' || session.scenes.length === 0}
+        >
+          ▶️
+        </button>
       </div>
 
       <div className="story-strip">
@@ -158,13 +197,13 @@ export default function App() {
 
       <div className="talk-bar">
         {hint ? <span className="hint">{hint}</span> : null}
-        <button className="talk-btn" type="button" onClick={handleMic} disabled={phase === 'thinking'}>
+        <button className="talk-btn" type="button" onClick={handleMic} disabled={phase === 'thinking' || phase === 'replaying'}>
           {micLabel}
         </button>
         <input
           value={typed}
           placeholder="（或在这里打字告诉我）"
-          disabled={phase === 'thinking'}
+          disabled={phase === 'thinking' || phase === 'replaying'}
           onChange={(e) => setTyped(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === 'Enter') submitTyped()

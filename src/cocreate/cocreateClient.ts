@@ -4,6 +4,7 @@ export async function requestCocreate(payload: {
   imageDataUrl: string
   childUtterance: string
   history: { role: 'child' | 'system'; text: string }[]
+  shapes?: unknown[]
 }): Promise<CocreateResponse> {
   const resp = await fetch('/api/cocreate', {
     method: 'POST',

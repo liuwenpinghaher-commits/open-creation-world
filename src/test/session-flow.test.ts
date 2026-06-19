@@ -20,12 +20,13 @@ describe('完整共创会话流程（确定性）', () => {
         { id: 'wing', kind: 'draw', points: [[0.3, 0.4], [0.2, 0.3], [0.25, 0.2]] } as never,
         { id: 'cloud', kind: 'ellipse', x: 0.7, y: 0.2, w: 0.15, h: 0.08, color: 'light-blue' },
       ],
-      animation: [{ shapeId: 'cloud', at: 0, x: 0.8, y: 0.2, durationMs: 600 }],
+      scenes: { append: [{ id: 's1', narration: '小马飞起来了。', actions: [{ shapeId: 'cloud', do: 'moveTo', x: 0.8, y: 0.2, durationMs: 600 }] }] },
       story: { append: '小马长出翅膀，飞向云朵。' },
       speak: '哇，你的马会飞啦！',
     }
     s = applyResponse(s, r1, '我画了一匹马，让它飞')
     expect(s.shapes.map((x) => x.id)).toEqual(['wing', 'cloud'])
+    expect(s.scenes.map((x) => x.id)).toEqual(['s1'])
     expect(s.story.length).toBe(1)
     expect(s.dialog).toEqual([
       { role: 'child', text: '我画了一匹马，让它飞' },
