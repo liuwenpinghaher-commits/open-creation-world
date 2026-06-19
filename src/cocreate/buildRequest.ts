@@ -9,6 +9,7 @@ export function buildRequest(input: {
   move: GuidanceMove
   hasDrawing?: boolean
   childContext?: ChildContext
+  sceneNote?: string
 }) {
   return {
     imageDataUrl: input.imageDataUrl,
@@ -17,5 +18,6 @@ export function buildRequest(input: {
     move: input.move,
     hasDrawing: !!input.hasDrawing,
     childContext: input.childContext,
+    sceneNote: input.sceneNote,
   }
 }

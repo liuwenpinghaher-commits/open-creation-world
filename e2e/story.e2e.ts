@@ -36,6 +36,8 @@ async function stubApi(page: Page) {
   await page.route('**/api/tts', (route) => route.fulfill({ status: 200, contentType: 'audio/wav', body: '' }))
   // 默认：AnimatedDrawings 未配置(501) → 兑现降级到轻量木偶动画
   await page.route('**/api/animate-figure', (route) => route.fulfill({ status: 501, contentType: 'application/json', body: '{}' }))
+  // 自动成文(B4)会调 story
+  await page.route('**/api/story', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ narrative: '今天画了一会儿。', highlights: [], tags: { torrance: {}, dispositions: [] }, interests: [] }) }))
 }
 
 function shapeIds(page: Page) {
@@ -124,6 +126,28 @@ test('创作伙伴：AI 只激发不替画，孩子指定后让"孩子自己的�
   await page.locator('.kid-tools button[title="新的一张"]').click()
   await expect.poll(() => shapeIds(page).then((ids) => ids.length), { timeout: 8000 }).toBe(0)
   await expect(page.locator('.empty-hint')).toBeVisible()
+})
+
+test('B1 纯画画也回应：孩子只画不说，停顿后 AI 自动发起一拍', async ({ page }) => {
+  const reqs: string[] = []
+  await page.route('**/api/partner', async (route) => {
+    reqs.push(route.request().postData() ?? '')
+    await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ noticed: '一个圆', dimension: 'observe_express', crowd: 'open', provoke: '这是什么呀？', fulfill: null }) })
+  })
+  await page.route('**/api/tts', (route) => route.fulfill({ status: 200, contentType: 'audio/wav', body: '' }))
+
+  await page.goto('/')
+  await expect.poll(async () => page.evaluate(() => !!(window as unknown as { __editor?: unknown }).__editor)).toBe(true)
+
+  // 真实画一笔，但一句话都不说
+  await page.mouse.move(300, 320); await page.mouse.down()
+  await page.mouse.move(340, 360); await page.mouse.move(380, 320); await page.mouse.up()
+
+  // 停顿 ~2.6s 后应自动发起一拍（不需要孩子开口）
+  await expect.poll(() => reqs.length, { timeout: 10000 }).toBeGreaterThan(0)
+  const body = JSON.parse(reqs[0])
+  expect(body.childUtterance === '' || body.childUtterance == null).toBe(true) // 没说话
+  expect(typeof body.imageDataUrl === 'string' && body.imageDataUrl.startsWith('data:image')).toBe(true) // 带着画
 })
 
 test('豪华兑现：AnimatedDrawings 可用时播放绑骨动画视频', async ({ page }) => {

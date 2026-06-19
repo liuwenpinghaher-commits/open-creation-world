@@ -17,7 +17,7 @@ class ShenbiDB extends Dexie {
 }
 
 const db = new ShenbiDB()
-const CURRENT_KEY = 'shenbi.currentWorkId'
+const CURRENT_PREFIX = 'shenbi.currentWorkId.' // 按孩子分桶（childId 为空＝默认桶），避免多孩子串作品
 let seq = 0
 
 export function newWorkId(): string {
@@ -25,11 +25,12 @@ export function newWorkId(): string {
   return `w_${Date.now()}_${seq}`
 }
 
-export function getCurrentId(): string | null {
-  try { return localStorage.getItem(CURRENT_KEY) } catch { return null }
+/** 取某个孩子"正在画的那张"的 id（childId 省略＝默认桶） */
+export function getCurrentId(childId = ''): string | null {
+  try { return localStorage.getItem(CURRENT_PREFIX + childId) } catch { return null }
 }
-export function setCurrentId(id: string): void {
-  try { localStorage.setItem(CURRENT_KEY, id) } catch { /* 无 localStorage 时忽略 */ }
+export function setCurrentId(childId: string, id: string): void {
+  try { localStorage.setItem(CURRENT_PREFIX + childId, id) } catch { /* 无 localStorage 时忽略 */ }
 }
 
 export async function saveWork(id: string, session: SessionState, snapshot: unknown, childId?: string): Promise<void> {

@@ -62,6 +62,9 @@ export async function listStories(childId?: string): Promise<LearningStory[]> {
   const all = childId ? await db.stories.where('childId').equals(childId).toArray() : await db.stories.toArray()
   return all.sort((a, b) => b.createdAt - a.createdAt)
 }
+export async function getStory(workId: string): Promise<LearningStory | undefined> {
+  return db.stories.get(`s_${workId}`)
+}
 export async function setFamilyNote(storyId: string, note: string): Promise<void> {
   const s = await db.stories.get(storyId)
   if (s) await db.stories.put({ ...s, familyNote: note })

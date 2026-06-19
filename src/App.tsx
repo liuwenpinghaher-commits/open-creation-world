@@ -14,7 +14,7 @@ import { saveWork, loadWork, listWorks, deleteWork, newWorkId, getCurrentId, set
 import { summarizeSession } from './guidance/summary'
 import { Settings } from './settings/Settings'
 import { buildChildContext, moveOptsFrom } from './settings/childContext'
-import { getActiveChildId, listProfiles, getPrefs, getSafety, getPrivacy, saveStory, saveProfile } from './store/family'
+import { getActiveChildId, listProfiles, getPrefs, getSafety, getPrivacy, saveStory, saveProfile, getStory, listStories } from './store/family'
 import { defaultPrefs, defaultSafety, type ChildContext, type LearningStory } from './types/settings'
 import type { SessionState } from './types/cocreate'
 
@@ -41,16 +41,20 @@ export default function App() {
   const [stories, setStories] = useState<Record<string, { narrative: string; highlights: string[] }>>({})
   const [speaking, setSpeaking] = useState(false) // TTS 播放中（全语音模式的可视反馈）
   const [lastSpoken, setLastSpoken] = useState('') // 最近一句 AI 的话，供"再听一次"
+  const [fallbackText, setFallbackText] = useState('') // A5：TTS 失败时临时显示文字兜底
   const { start, stop, speak } = useVoice()
 
-  /** 全语音：说出 AI 的话 + 维护说话指示与"再听一次"；没出声则提示 */
+  const phaseRef = useRef(phase) // 给 store.listen 等闭包读最新 phase
+  useEffect(() => { phaseRef.current = phase }, [phase])
+
+  /** 全语音：说出 AI 的话 + 说话指示 + "再听一次"；TTS 没出声则临时显示文字兜底 */
   async function speakLine(text: string): Promise<void> {
     if (!text) return
     setLastSpoken(text)
     setSpeaking(true)
     const ok = await speak(text)
     setSpeaking(false)
-    if (!ok) flashHint('没听到的话，点 🔊 再听一次～')
+    if (!ok) { setFallbackText(text); window.setTimeout(() => setFallbackText(''), 8000); flashHint('听不到？这里有字，也可点 🔊 再试') }
   }
 
   // 个性化：活跃孩子的 childContext 与引导权重（refs 供 runTurn 读，避免闭包过期）
@@ -60,6 +64,7 @@ export default function App() {
   const activeProfileRef = useRef<import('./types/settings').ChildProfile | null>(null)
   const privacyRef = useRef(false)
   async function loadFamily() {
+    const prev = activeChildRef.current
     try {
       const profiles = await listProfiles()
       const aid = (await getActiveChildId()) ?? profiles[0]?.id ?? null
@@ -72,8 +77,14 @@ export default function App() {
       activeProfileRef.current = active
       privacyRef.current = await getPrivacy()
     } catch { childCtxRef.current = buildChildContext(null, defaultPrefs(), defaultSafety()) }
+    // B2：活跃孩子变了 + 画布已就绪 → 存当前(并自动成文) → 切到该孩子自己的作品
+    const e = editorRef.current
+    if (e && restoredRef.current && activeChildRef.current !== prev) {
+      saveNow()
+      void autoStory(workIdRef.current, sessionRef.current)
+      await openWorkForChild(e, activeChildRef.current ?? '')
+    }
   }
-  useEffect(() => { void loadFamily() }, [])
 
   const sessionRef = useRef(session)
   useEffect(() => { sessionRef.current = session }, [session])
@@ -88,45 +99,68 @@ export default function App() {
     try { void saveWork(workIdRef.current, s, editor.getSnapshot(), activeChildRef.current) } catch (err) { console.warn('save failed:', err) }
   }
 
+  /** 切到某个孩子"正在画的那张"（B2：作品按孩子分桶，互不串） */
+  async function openWorkForChild(e: Editor, childId: string) {
+    const id = getCurrentId(childId) || newWorkId()
+    workIdRef.current = id
+    setCurrentId(childId, id)
+    setCurrentWorkId(id)
+    const ids = [...e.getCurrentPageShapeIds()]; if (ids.length) e.deleteShapes(ids)
+    try {
+      const saved = await loadWork(id)
+      if (saved) { if (saved.snapshot) e.loadSnapshot(saved.snapshot as never); setSession(saved.session) }
+      else setSession(emptySession())
+    } catch (err) { console.warn('open work failed:', err); setSession(emptySession()) }
+    dirtyRef.current = false
+    setHeard('')
+  }
+
+  /** B4：一张画聊过了就自动生成学习故事（已有则跳过），让成长报告自动闭环 */
+  async function autoStory(workId: string, sess: SessionState) {
+    if (!workId || !sess.dialog.some((d) => d.role === 'child')) return
+    if (await getStory(workId)) return
+    await makeStory({ id: workId, session: sess, createdAt: 0, updatedAt: 0, childId: activeChildRef.current })
+  }
+
+  /** B1：孩子画完停顿 → 自动发起一拍（仅凭画就回应，不必开口） */
+  function maybeAutoTurn() {
+    const e = editorRef.current
+    if (!e || phaseRef.current !== 'idle' || !dirtyRef.current) return
+    if (e.getCurrentPageShapeIds().size === 0) return
+    setPhase('thinking')
+    runTurn('').catch((err) => console.warn('auto turn failed:', err)).finally(() => setPhase('idle'))
+  }
+
   async function handleEditorMount(e: Editor) {
     editorRef.current = e
-    exposeForTest(e)
-
+    await loadFamily() // 先知道活跃孩子是谁
     if (!restoredRef.current) {
       restoredRef.current = true
-      const id = getCurrentId() || newWorkId()
-      workIdRef.current = id
-      setCurrentId(id)
-      setCurrentWorkId(id)
-      try {
-        const saved = await loadWork(id)
-        if (saved) {
-          if (saved.snapshot) e.loadSnapshot(saved.snapshot as never)
-          setSession(saved.session)
-        }
-      } catch (err) { console.warn('restore failed:', err) }
+      await openWorkForChild(e, activeChildRef.current ?? '')
     }
     e.setCurrentTool('draw')
 
-    let timer = 0
+    let saveTimer = 0, drawTimer = 0
     e.store.listen(
       () => {
         if (suppressSaveRef.current) return // 兑现动画帧不算孩子改画，跳过
         dirtyRef.current = true
-        window.clearTimeout(timer)
-        timer = window.setTimeout(() => saveNow(), 1000)
+        window.clearTimeout(saveTimer); saveTimer = window.setTimeout(() => saveNow(), 1000)
+        window.clearTimeout(drawTimer); drawTimer = window.setTimeout(() => maybeAutoTurn(), 2600) // B1
       },
       { scope: 'document', source: 'user' }
     )
+    exposeForTest(e) // 末尾再暴露：确保 E2E 在画布完全就绪后才操作（避免与 openWorkForChild 清画竞态）
   }
 
-  /** 开新的一张：另存为新作品（旧的已留在成长册里） */
+  /** 开新的一张：先把当前这张自动成文，再另存新作品 */
   async function handleNewStory() {
     if (phase !== 'idle') return
     const editor = editorRef.current
+    void autoStory(workIdRef.current, sessionRef.current)
     const id = newWorkId()
     workIdRef.current = id
-    setCurrentId(id)
+    setCurrentId(activeChildRef.current ?? '', id)
     setCurrentWorkId(id)
     setSession(emptySession())
     setHeard('')
@@ -137,7 +171,15 @@ export default function App() {
     }
   }
 
-  async function openJournal() { setJournal(await listWorks()) }
+  async function refreshJournal() {
+    const works = (await listWorks()).filter((w) => !activeChildRef.current || w.childId === activeChildRef.current)
+    const ss = await listStories(activeChildRef.current)
+    const map: Record<string, { narrative: string; highlights: string[] }> = {}
+    for (const s of ss) map[s.workId] = { narrative: s.narrative, highlights: s.highlights }
+    setStories(map)
+    setJournal(works)
+  }
+  async function openJournal() { await refreshJournal() } // B2 按孩子过滤 + B5 加载已存故事
 
   async function openWork(id: string) {
     const editor = editorRef.current
@@ -146,7 +188,7 @@ export default function App() {
     const saved = await loadWork(id)
     if (!saved) return
     workIdRef.current = id
-    setCurrentId(id)
+    setCurrentId(activeChildRef.current ?? '', id)
     setCurrentWorkId(id)
     const ids = [...editor.getCurrentPageShapeIds()]
     if (ids.length) editor.deleteShapes(ids)
@@ -158,8 +200,8 @@ export default function App() {
 
   async function removeWork(id: string) {
     await deleteWork(id)
-    setJournal(await listWorks())
     if (id === workIdRef.current) await handleNewStory()
+    await refreshJournal()
   }
 
   /** 生成学习故事（Learning Stories）：生成强项导向叙事，持久化，并把检测到的兴趣并入孩子档案 */
@@ -229,7 +271,7 @@ export default function App() {
     // 节奏自适应：结合孩子这句 + 是否在画，判断卡住/投入，决定降难度+加支架
     const childUtts = sessionRef.current.dialog.filter((d) => d.role === 'child').map((d) => d.text)
     const move = nextMove(sessionRef.current.guidance, readEngagement([...childUtts, utterance], drew), moveOptsRef.current)
-    const res = await requestPartner(buildRequest({ imageDataUrl, childUtterance: utterance, history: sessionRef.current.dialog, move, hasDrawing: shapeCount > 0, childContext: childCtxRef.current }))
+    const res = await requestPartner(buildRequest({ imageDataUrl, childUtterance: utterance, history: sessionRef.current.dialog, move, hasDrawing: shapeCount > 0, childContext: childCtxRef.current, sceneNote: sessionRef.current.sceneNote }))
 
     // 防"假兑现"：要求兑现但画布空 → 不动画、改说引导先画。说什么就存什么（说=气泡=成长册）
     const decision = fulfillDecision(res, shapeCount)
@@ -288,7 +330,7 @@ export default function App() {
       .finally(() => setPhase('idle'))
   }
 
-  function setTool(name: 'draw' | 'eraser') { editorRef.current?.setCurrentTool(name) }
+  function setTool(name: 'draw' | 'eraser' | 'select') { editorRef.current?.setCurrentTool(name) }
   function undo() { editorRef.current?.undo() }
 
   const micLabel = phase === 'thinking' ? '✏️ 我在听…' : phase === 'recording' ? '🔴 说完了，点我' : '🎙️ 点我说话'
@@ -300,6 +342,7 @@ export default function App() {
       <div className="kid-tools">
         <button type="button" title="画笔" onClick={() => setTool('draw')}>🖌️</button>
         <button type="button" title="橡皮" onClick={() => setTool('eraser')}>🧽</button>
+        <button type="button" title="选这个（让它单独动）" onClick={() => setTool('select')}>👆</button>
         <button type="button" title="撤销" onClick={undo}>↩️</button>
         <button type="button" title="新的一张" onClick={handleNewStory} disabled={phase !== 'idle'}>🆕</button>
         <button type="button" title="成长册（给爸爸妈妈看）" onClick={openJournal}>📖</button>
@@ -390,6 +433,8 @@ export default function App() {
       {session.dialog.length === 0 && phase === 'idle' ? (
         <div className="empty-hint">在纸上画点什么，或者点下面的按钮和我说说话吧～</div>
       ) : null}
+
+      {fallbackText ? <div className="partner-bubble">{fallbackText}</div> : null}
 
       {/* 全语音：不显示 AI 文字，只用动效反馈 */}
       {phase === 'thinking' ? <div className="thinking-overlay">✨ 我在想…</div> : null}

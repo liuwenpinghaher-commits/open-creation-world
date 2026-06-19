@@ -47,4 +47,6 @@ export type SessionState = {
   guidance: GuidanceDimension[]
   /** 孩子产出信号历史（度量"说了多少、被拉伸多远"） */
   signals: string[]
+  /** AI 对这幅画最近一次的理解（跨拍记忆，回传给模型保持连续认知） */
+  sceneNote?: string
 }

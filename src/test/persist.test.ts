@@ -1,6 +1,6 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import 'fake-indexeddb/auto'
-import { saveWork, loadWork, listWorks, deleteWork, newWorkId } from '../store/persist'
+import { saveWork, loadWork, listWorks, deleteWork, newWorkId, getCurrentId, setCurrentId } from '../store/persist'
 import { applyPartner, emptySession } from '../store/sessionStore'
 
 function workWith(signal: string) {
@@ -51,5 +51,20 @@ describe('persist 多作品', () => {
     await saveWork(id, emptySession(), {})
     await deleteWork(id)
     expect(await loadWork(id)).toBeNull()
+  })
+
+  it('B2：当前作品指针按孩子分桶，互不串', () => {
+    const store = new Map<string, string>()
+    vi.stubGlobal('localStorage', {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => { store.set(k, v) },
+      removeItem: (k: string) => { store.delete(k) },
+    })
+    setCurrentId('childA', 'wA')
+    setCurrentId('childB', 'wB')
+    expect(getCurrentId('childA')).toBe('wA')
+    expect(getCurrentId('childB')).toBe('wB')
+    expect(getCurrentId('childC')).toBeNull() // 没设过的孩子是空
+    vi.unstubAllGlobals()
   })
 })

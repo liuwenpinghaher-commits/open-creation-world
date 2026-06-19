@@ -19,6 +19,7 @@ export function applyPartner(
 
   const guidance = [...state.guidance, res.dimension]
   const signals = res.childSignal ? [...state.signals, res.childSignal] : state.signals
+  const sceneNote = res.noticed?.trim() ? res.noticed : state.sceneNote
 
-  return { dialog, guidance, signals }
+  return { dialog, guidance, signals, sceneNote }
 }

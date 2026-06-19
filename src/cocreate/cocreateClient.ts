@@ -8,6 +8,7 @@ export async function requestPartner(payload: {
   move: GuidanceMove
   hasDrawing?: boolean
   childContext?: ChildContext
+  sceneNote?: string
 }): Promise<PartnerResponse> {
   const resp = await fetch('/api/partner', {
     method: 'POST',

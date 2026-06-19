@@ -115,12 +115,16 @@ export async function callPartner(input: {
   move: { dimension: GuidanceDimension; crowd: CrowdType }
   hasDrawing?: boolean
   childContext?: ChildContext
+  sceneNote?: string
 }): Promise<PartnerResponse> {
   const canvasNote = input.hasDrawing === false
     ? '\n【画布上现在还没有任何东西。不要假设有可动的角色，更不要设置 fulfill 说"它动起来了"——先引导孩子画点东西。】'
     : ''
+  const memoryNote = input.sceneNote?.trim()
+    ? `\n【你之前看这幅画时的理解："${input.sceneNote}"。结合现在画面的变化继续，保持对这幅画的连续认知，别每次从头猜。】`
+    : ''
   const userContent: Array<Record<string, unknown>> = [
-    { type: 'text', text: (input.childUtterance || '（孩子在画画，还没说话）') + canvasNote },
+    { type: 'text', text: (input.childUtterance || '（孩子在画画，还没说话）') + canvasNote + memoryNote },
   ]
   if (input.imageDataUrl && input.imageDataUrl.startsWith('data:image')) {
     userContent.push({ type: 'image_url', image_url: { url: input.imageDataUrl } })
