@@ -1,4 +1,5 @@
 // 真实语音：TTS=qwen-tts、STT=qwen3-asr-flash（阿里百炼 DashScope）。
+import { getConfig } from './config'
 const GEN_URL = 'https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation'
 
 async function fetchRetry(url: string, init: RequestInit, tries = 3): Promise<Response> {
@@ -20,14 +21,15 @@ async function fetchRetry(url: string, init: RequestInit, tries = 3): Promise<Re
 /** 文本 → 语音字节 + 真实 MIME。qwen-tts 返回音频 url，再下载其字节并带回上游 content-type。 */
 export async function synthesize(text: string): Promise<{ audio: Buffer; mime: string }> {
   const empty = { audio: Buffer.alloc(0), mime: 'audio/wav' }
-  if (!text.trim()) return empty
+  const { voice } = getConfig()
+  if (!text.trim() || !voice.ttsEnabled) return empty
   const resp = await fetchRetry(GEN_URL, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${process.env.VOICE_API_KEY}`,
+      Authorization: `Bearer ${voice.apiKey}`,
     },
-    body: JSON.stringify({ model: 'qwen-tts', input: { text, voice: 'Cherry' } }),
+    body: JSON.stringify({ model: 'qwen-tts', input: { text, voice: voice.ttsVoice } }),
   })
   if (!resp.ok) throw new Error(`tts error ${resp.status}: ${await resp.text()}`)
   const data = await resp.json()
@@ -50,12 +52,14 @@ function guessMimeFromUrl(url: string): string {
 /** 语音字节 → 文本。base64 data uri 走 qwen3-asr-flash（OpenAI 兼容 input_audio）。 */
 export async function transcribe(audio: Buffer, mime = 'audio/webm'): Promise<string> {
   if (!audio || audio.length === 0) return ''
+  const { model, voice } = getConfig()
+  if (!voice.sttEnabled) return ''
   const dataUri = `data:${mime};base64,${audio.toString('base64')}`
-  const resp = await fetchRetry(`${process.env.MODEL_BASE_URL}/chat/completions`, {
+  const resp = await fetchRetry(`${model.baseUrl}/chat/completions`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${process.env.MODEL_API_KEY}`,
+      Authorization: `Bearer ${model.apiKey}`,
     },
     body: JSON.stringify({
       model: 'qwen3-asr-flash',

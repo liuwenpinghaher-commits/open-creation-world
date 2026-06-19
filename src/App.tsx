@@ -12,6 +12,10 @@ import { buildRequest } from './cocreate/buildRequest'
 import { applyPartner, emptySession } from './store/sessionStore'
 import { saveWork, loadWork, listWorks, deleteWork, newWorkId, getCurrentId, setCurrentId, type WorkRecord } from './store/persist'
 import { summarizeSession } from './guidance/summary'
+import { Settings } from './settings/Settings'
+import { buildChildContext, moveOptsFrom } from './settings/childContext'
+import { getActiveChildId, listProfiles, getPrefs, getSafety } from './store/family'
+import { defaultPrefs, defaultSafety, type ChildContext } from './types/settings'
 import type { SessionState } from './types/cocreate'
 
 type Phase = 'idle' | 'recording' | 'thinking'
@@ -32,7 +36,27 @@ export default function App() {
   const [figureVideo, setFigureVideo] = useState<string | null>(null) // 豪华兑现：AnimatedDrawings 视频
   const [heard, setHeard] = useState('') // P4：回显识别到的孩子语音
   const [expandedWork, setExpandedWork] = useState<string | null>(null) // 成长册里展开看对话的作品
+  const [showSettings, setShowSettings] = useState(false)
+  const [stories, setStories] = useState<Record<string, { narrative: string; highlights: string[] }>>({})
   const { start, stop, speak } = useVoice()
+
+  // 个性化：活跃孩子的 childContext 与引导权重（refs 供 runTurn 读，避免闭包过期）
+  const childCtxRef = useRef<ChildContext | undefined>(undefined)
+  const moveOptsRef = useRef<ReturnType<typeof moveOptsFrom>>(moveOptsFrom(defaultPrefs()))
+  const activeChildRef = useRef<string | undefined>(undefined)
+  async function loadFamily() {
+    try {
+      const profiles = await listProfiles()
+      const aid = (await getActiveChildId()) ?? profiles[0]?.id ?? null
+      const active = profiles.find((p) => p.id === aid) ?? null
+      const prefs = active ? await getPrefs(active.id) : defaultPrefs()
+      const safety = await getSafety()
+      childCtxRef.current = buildChildContext(active, prefs, safety)
+      moveOptsRef.current = moveOptsFrom(prefs)
+      activeChildRef.current = active?.id
+    } catch { childCtxRef.current = buildChildContext(null, defaultPrefs(), defaultSafety()) }
+  }
+  useEffect(() => { void loadFamily() }, [])
 
   const sessionRef = useRef(session)
   useEffect(() => { sessionRef.current = session }, [session])
@@ -44,7 +68,7 @@ export default function App() {
   function saveNow(s: SessionState = sessionRef.current) {
     const editor = editorRef.current
     if (!editor || !workIdRef.current) return
-    try { void saveWork(workIdRef.current, s, editor.getSnapshot()) } catch (err) { console.warn('save failed:', err) }
+    try { void saveWork(workIdRef.current, s, editor.getSnapshot(), activeChildRef.current) } catch (err) { console.warn('save failed:', err) }
   }
 
   async function handleEditorMount(e: Editor) {
@@ -121,6 +145,16 @@ export default function App() {
     if (id === workIdRef.current) await handleNewStory()
   }
 
+  /** 生成学习故事（Learning Stories）：把这次创作的对话送后端生成强项导向叙事 */
+  async function makeStory(w: WorkRecord) {
+    try {
+      const r = await fetch('/api/story', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dialog: w.session.dialog }) })
+      if (!r.ok) return
+      const data = await r.json() as { narrative: string; highlights?: string[] }
+      setStories((s) => ({ ...s, [w.id]: { narrative: data.narrative, highlights: data.highlights ?? [] } }))
+    } catch (err) { console.warn('story failed:', err) }
+  }
+
   function flashHint(msg: string) {
     setHint(msg)
     window.setTimeout(() => setHint(''), 4000)
@@ -154,8 +188,8 @@ export default function App() {
 
     // 节奏自适应：结合孩子这句 + 是否在画，判断卡住/投入，决定降难度+加支架
     const childUtts = sessionRef.current.dialog.filter((d) => d.role === 'child').map((d) => d.text)
-    const move = nextMove(sessionRef.current.guidance, readEngagement([...childUtts, utterance], drew))
-    const res = await requestPartner(buildRequest({ imageDataUrl, childUtterance: utterance, history: sessionRef.current.dialog, move, hasDrawing: shapeCount > 0 }))
+    const move = nextMove(sessionRef.current.guidance, readEngagement([...childUtts, utterance], drew), moveOptsRef.current)
+    const res = await requestPartner(buildRequest({ imageDataUrl, childUtterance: utterance, history: sessionRef.current.dialog, move, hasDrawing: shapeCount > 0, childContext: childCtxRef.current }))
 
     // 防"假兑现"：要求兑现但画布空 → 不动画、改说引导先画。说什么就存什么（说=气泡=成长册）
     const decision = fulfillDecision(res, shapeCount)
@@ -230,7 +264,12 @@ export default function App() {
         <button type="button" title="撤销" onClick={undo}>↩️</button>
         <button type="button" title="新的一张" onClick={handleNewStory} disabled={phase !== 'idle'}>🆕</button>
         <button type="button" title="成长册（给爸爸妈妈看）" onClick={openJournal}>📖</button>
+        <button type="button" title="设置（家长）" onClick={() => setShowSettings(true)}>⚙️</button>
       </div>
+
+      {showSettings ? (
+        <Settings onClose={() => setShowSettings(false)} onChanged={() => void loadFamily()} />
+      ) : null}
 
       {journal ? (
         <div className="review-mask" onClick={() => setJournal(null)}>
@@ -266,11 +305,22 @@ export default function App() {
                           ))}
                         </div>
                       ) : null}
+                      {stories[w.id] ? (
+                        <div className="learning-story">
+                          <p className="story-narrative">{stories[w.id].narrative}</p>
+                          {stories[w.id].highlights.length ? (
+                            <ul className="story-highlights">{stories[w.id].highlights.map((h, i) => <li key={i}>✨ {h}</li>)}</ul>
+                          ) : null}
+                        </div>
+                      ) : null}
                       <div className="journal-actions">
                         {w.session.dialog.length ? (
                           <button type="button" onClick={() => setExpandedWork(expandedWork === w.id ? null : w.id)}>
                             {expandedWork === w.id ? '收起' : '看这次聊了什么'}
                           </button>
+                        ) : null}
+                        {w.session.dialog.some((d) => d.role === 'child') && !stories[w.id] ? (
+                          <button type="button" onClick={() => makeStory(w)}>✨生成学习故事</button>
                         ) : null}
                         {w.id === currentWorkId ? null : <button type="button" onClick={() => openWork(w.id)}>打开</button>}
                         <button type="button" className="journal-del" onClick={() => removeWork(w.id)}>删除</button>

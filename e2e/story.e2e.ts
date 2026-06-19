@@ -197,3 +197,60 @@ test('对象定位：选中一个，兑现只动选中的那个', async ({ page 
   const treeX1 = await shapeX(page, 'shape:tree')
   expect(Math.abs((treeX1 as number) - (treeX0 as number))).toBeLessThan(0.5) // tree 没被动
 })
+
+test('家长门 + 设置：算术门通过、添加孩子、改引导偏好', async ({ page }) => {
+  await page.route('**/api/config', (route) => route.fulfill({
+    status: 200, contentType: 'application/json',
+    body: JSON.stringify({ model: { id: 'qwen-vl-max', baseUrl: 'x', apiKey: { set: true, last4: '1234' } }, voice: { sttEnabled: true, ttsEnabled: true, ttsVoice: 'Cherry', apiKey: { set: false, last4: '' } }, fulfill: { enabled: true, behaviors: ['fly'], animatedDrawingsUrl: '' } }),
+  }))
+  await page.goto('/')
+  await expect.poll(async () => page.evaluate(() => !!(window as unknown as { __editor?: unknown }).__editor)).toBe(true)
+
+  await page.locator('.kid-tools button[title="设置（家长）"]').click()
+  // 家长门：读出算术题、长按 2 秒、答对
+  const q = (await page.locator('.gate-card b').textContent()) ?? ''
+  const [a, b] = (q.match(/\d+/g) ?? ['0', '0']).map(Number)
+  await page.locator('.gate-hold').dispatchEvent('pointerdown')
+  await page.waitForTimeout(2200)
+  await page.locator('.gate-input').fill(String(a + b))
+  await page.locator('.gate-card .review-close').click()
+
+  // 进入设置（孩子页）→ 添加孩子
+  await expect(page.locator('.settings-card')).toBeVisible()
+  await page.locator('.profile.add').click()
+  await expect(page.locator('.profile-edit')).toBeVisible()
+
+  // 切到引导页 → 把"想办法"设为重点（按钮变 on）
+  await page.locator('.settings-tabs button', { hasText: '引导' }).click()
+  await expect(page.locator('.settings-sec h3')).toContainText('引导偏好')
+  const focusBtn = page.locator('.settings-sec .emoji-pick button', { hasText: '想办法' })
+  await focusBtn.click()
+  await expect(focusBtn).toHaveClass(/on/)
+
+  // 系统页能看到掩码密钥（placeholder 里）
+  await page.locator('.settings-tabs button', { hasText: '系统' }).click()
+  await expect(page.locator('input[placeholder*="1234"]')).toBeVisible()
+})
+
+test('成长故事：把一次创作生成强项导向的学习故事', async ({ page }) => {
+  await page.route('**/api/partner', (route) => route.fulfill({
+    status: 200, contentType: 'application/json',
+    body: JSON.stringify({ noticed: '一个圆', dimension: 'imagination', crowd: 'open', provoke: '它叫什么呀？', fulfill: null, childSignal: '画了一条龙' }),
+  }))
+  await page.route('**/api/tts', (route) => route.fulfill({ status: 200, contentType: 'audio/wav', body: '' }))
+  await page.route('**/api/story', (route) => route.fulfill({
+    status: 200, contentType: 'application/json',
+    body: JSON.stringify({ narrative: '今天小宝画了一条龙，还自己给它起了名字，真有想象力！', highlights: ['自己起名字'], tags: { torrance: {}, dispositions: ['爱表达'] } }),
+  }))
+
+  await page.goto('/')
+  await expect.poll(async () => page.evaluate(() => !!(window as unknown as { __editor?: unknown }).__editor)).toBe(true)
+  await childDraws(page, 'd', 300, 300)
+  await sendTurn(page, '你看我画的龙')
+  await expect(page.locator('.partner-bubble')).toBeVisible()
+
+  await page.locator('.kid-tools button[title="成长册（给爸爸妈妈看）"]').click()
+  await page.locator('.journal-item.current button', { hasText: '生成学习故事' }).click()
+  await expect(page.locator('.learning-story')).toContainText('真有想象力')
+  await expect(page.locator('.story-highlights')).toContainText('自己起名字')
+})

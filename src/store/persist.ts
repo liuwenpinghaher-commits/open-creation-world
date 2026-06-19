@@ -4,7 +4,7 @@ import type { SessionState } from '../types/cocreate'
 // 多作品持久化：每张创作一条记录（session + tldraw 快照 + 时间）。可留存、回看、删除。
 // "当前正在画哪张"用 localStorage 记一个指针。
 
-export type Work = { id: string; session: SessionState; snapshot: unknown; createdAt: number; updatedAt: number }
+export type Work = { id: string; session: SessionState; snapshot: unknown; createdAt: number; updatedAt: number; childId?: string }
 export type WorkRecord = Omit<Work, 'snapshot'> // 列表用，不带笨重快照
 
 class ShenbiDB extends Dexie {
@@ -32,10 +32,10 @@ export function setCurrentId(id: string): void {
   try { localStorage.setItem(CURRENT_KEY, id) } catch { /* 无 localStorage 时忽略 */ }
 }
 
-export async function saveWork(id: string, session: SessionState, snapshot: unknown): Promise<void> {
+export async function saveWork(id: string, session: SessionState, snapshot: unknown, childId?: string): Promise<void> {
   const now = Date.now()
   const existing = await db.works.get(id)
-  await db.works.put({ id, session, snapshot, createdAt: existing?.createdAt ?? now, updatedAt: now })
+  await db.works.put({ id, session, snapshot, createdAt: existing?.createdAt ?? now, updatedAt: now, childId: childId ?? existing?.childId })
 }
 
 export async function loadWork(id: string): Promise<{ session: SessionState; snapshot: unknown } | null> {

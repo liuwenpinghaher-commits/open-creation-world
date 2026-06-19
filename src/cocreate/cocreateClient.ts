@@ -1,4 +1,5 @@
 import type { GuidanceMove, PartnerResponse } from '../types/cocreate'
+import type { ChildContext } from '../types/settings'
 
 export async function requestPartner(payload: {
   imageDataUrl?: string
@@ -6,6 +7,7 @@ export async function requestPartner(payload: {
   history: { role: 'child' | 'partner'; text: string }[]
   move: GuidanceMove
   hasDrawing?: boolean
+  childContext?: ChildContext
 }): Promise<PartnerResponse> {
   const resp = await fetch('/api/partner', {
     method: 'POST',

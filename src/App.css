@@ -210,6 +210,32 @@ body,
   background: #fff;
 }
 
+/* 设置中心 */
+.settings-card { width: min(520px, 92vw); }
+.gate-card { text-align: center; }
+.gate-hold { width: 100%; padding: 16px; border: none; border-radius: 14px; background: #ffcf33; font-size: 18px; font-weight: 700; margin: 10px 0; cursor: pointer; }
+.gate-input { width: 100%; padding: 12px; border-radius: 12px; border: 1px solid #c7ced8; font-size: 18px; text-align: center; margin: 8px 0; }
+.gate-err { color: #c0392b; font-size: 14px; }
+.settings-tabs { display: flex; gap: 8px; margin-bottom: 14px; }
+.settings-tabs button { flex: 1; padding: 10px; border: none; border-radius: 12px; background: #eef1f5; font-size: 15px; font-weight: 600; cursor: pointer; }
+.settings-tabs button.on { background: #ffcf33; color: #5a4500; }
+.settings-sec h3 { margin: 4px 0 12px; }
+.settings-sec label { display: flex; flex-direction: column; gap: 6px; margin: 12px 0; font-size: 14px; color: #5a6675; }
+.settings-sec label.chk { flex-direction: row; align-items: center; gap: 8px; }
+.settings-sec input, .settings-sec select { padding: 10px; border-radius: 10px; border: 1px solid #c7ced8; font-size: 15px; }
+.settings-sec label.chk input { width: auto; }
+.profile-row, .emoji-pick { display: flex; flex-wrap: wrap; gap: 8px; }
+.profile, .emoji-pick button, .profile.add { border: 1px solid #dde3ea; border-radius: 999px; padding: 8px 14px; background: #fff; font-size: 15px; cursor: pointer; }
+.profile.on, .emoji-pick button.on { background: #ffcf33; border-color: #ffcf33; }
+.profile-edit { margin-top: 14px; }
+.test-msg { font-size: 14px; color: #3a6b4a; align-self: center; }
+
+/* 学习故事 */
+.learning-story { margin-top: 10px; padding: 12px 14px; background: #f3f9f4; border-radius: 12px; border: 1px solid #e0efe3; }
+.story-narrative { margin: 0; font-size: 15px; line-height: 1.6; color: #2a3340; }
+.story-highlights { margin: 8px 0 0; padding-left: 18px; }
+.story-highlights li { font-size: 14px; color: #3a6b4a; margin: 4px 0; }
+
 .thinking-overlay {
   position: absolute;
   top: 50%;

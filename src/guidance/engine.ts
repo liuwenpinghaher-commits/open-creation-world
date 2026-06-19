@@ -47,25 +47,32 @@ export function readEngagement(childUtterances: string[], drewThisTurn = false):
   return 'normal'
 }
 
-/** 选下一个目标维度：出现次数最少 → 尽量不等于上一拍 → 按 DIMS 固定序 */
-export function nextDimension(history: GuidanceDimension[]): GuidanceDimension {
+export type MoveOpts = {
+  weights?: Partial<Record<GuidanceDimension, number>> // 家长偏好：>1 多练该维度
+  lockSupport?: 'auto' | 'high' | 'normal' // 支架：自适应或锁定
+}
+
+/** 选下一个目标维度：按权重的"有效次数(次数/权重)"最少 → 不等于上一拍 → 固定序。无权重时退化为均衡轮换。 */
+export function nextDimension(history: GuidanceDimension[], weights?: MoveOpts['weights']): GuidanceDimension {
   const last = history[history.length - 1]
-  const min = Math.min(...DIMS.map((d) => countOf(history, d)))
-  const candidates = DIMS.filter((d) => countOf(history, d) === min)
+  const eff = (d: GuidanceDimension) => countOf(history, d) / Math.max(0.01, weights?.[d] ?? 1)
+  const min = Math.min(...DIMS.map(eff))
+  const candidates = DIMS.filter((d) => eff(d) <= min + 1e-9)
   const avoidingLast = candidates.filter((d) => d !== last)
   return (avoidingLast.length ? avoidingLast : candidates)[0]
 }
 
-/** 完整一步：维度 + CROWD 提问 + 支架强度。孩子卡住时降难度到最具体维度并提高支架。 */
-export function nextMove(history: GuidanceDimension[], engagement: Engagement = 'normal'): GuidanceMove {
+/** 完整一步：维度 + CROWD 提问 + 支架强度。卡住→降到最具体维度+高支架；可加权偏好与锁定支架。 */
+export function nextMove(history: GuidanceDimension[], engagement: Engagement = 'normal', opts: MoveOpts = {}): GuidanceMove {
+  const lock = opts.lockSupport ?? 'auto'
+  const support = lock === 'auto' ? (engagement === 'stuck' ? 'high' : 'normal') : lock
   if (engagement === 'stuck') {
-    // 救场：切到最容易、最具体的维度（避开刚用过的），用具体的 Wh 提问，给最强支架
     const last = history[history.length - 1]
     const dimension = EASE_ORDER.find((d) => d !== last) ?? EASE_ORDER[0]
-    return { dimension, crowd: 'wh', support: 'high' }
+    return { dimension, crowd: 'wh', support }
   }
-  const dimension = nextDimension(history)
+  const dimension = nextDimension(history, opts.weights)
   const crowds = CROWD_BY_DIM[dimension]
   const crowd = crowds[countOf(history, dimension) % crowds.length]
-  return { dimension, crowd, support: 'normal' }
+  return { dimension, crowd, support }
 }

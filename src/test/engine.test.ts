@@ -68,3 +68,20 @@ describe('引导引擎：节奏自适应', () => {
     expect(nextMove(['observe_express'], 'stuck').dimension).toBe('narrative_logic')
   })
 })
+
+describe('引导引擎：家长偏好（加权 + 锁定支架）', () => {
+  it('权重高的维度被选得更多', () => {
+    const weights = { observe_express: 1, narrative_logic: 1, imagination: 1, problem_solving: 3 }
+    const history: GuidanceDimension[] = []
+    for (let i = 0; i < 12; i++) history.push(nextMove(history, 'normal', { weights }).dimension)
+    const ps = history.filter((d) => d === 'problem_solving').length
+    const oe = history.filter((d) => d === 'observe_express').length
+    expect(ps).toBeGreaterThan(oe)
+  })
+  it('锁定支架=high 时即使不卡住也给高支架', () => {
+    expect(nextMove([], 'normal', { lockSupport: 'high' }).support).toBe('high')
+  })
+  it('锁定支架=normal 时即使卡住也只给 normal', () => {
+    expect(nextMove(['imagination'], 'stuck', { lockSupport: 'normal' }).support).toBe('normal')
+  })
+})

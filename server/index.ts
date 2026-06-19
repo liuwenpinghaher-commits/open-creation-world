@@ -6,6 +6,8 @@ dotenv.config({ path: join(dirname(fileURLToPath(import.meta.url)), '.env'), ove
 import express from 'express'
 import { callPartner } from './partner'
 import { transcribe, synthesize } from './voice'
+import { getConfig, saveConfig, maskConfig } from './config'
+import { callStory } from './story'
 
 const app = express()
 app.use(express.json({ limit: '12mb' }))
@@ -36,8 +38,30 @@ app.post('/api/stt', async (req, res) => {
 
 // 可选：Meta AnimatedDrawings 人物绑骨动画（需自行运行其服务并设 ANIMATED_DRAWINGS_URL）。
 // 约定：上游接收 { imageDataUrl }，返回 { videoUrl }。未配置则 501，前端自动降级到轻量木偶动画。
+// 系统配置：读(掩码)/写(家长门后)/测连
+app.get('/api/config', (_req, res) => res.json(maskConfig(getConfig())))
+app.post('/api/config', (req, res) => {
+  try { res.json(saveConfig(req.body)) } catch (e) { fail(res, 'config-save', e) }
+})
+app.post('/api/config/test', async (_req, res) => {
+  try {
+    const { model } = getConfig()
+    const r = await fetch(`${model.baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${model.apiKey}` },
+      body: JSON.stringify({ model: model.id, messages: [{ role: 'user', content: 'ping，只回一个字"好"' }] }),
+    })
+    res.json({ ok: r.ok, status: r.status })
+  } catch (e) { fail(res, 'config-test', e) }
+})
+
+// 学习故事：把一次创作的对话/信号生成强项导向叙事 + 创造力标签
+app.post('/api/story', async (req, res) => {
+  try { res.json(await callStory(req.body)) } catch (e) { fail(res, 'story', e) }
+})
+
 app.post('/api/animate-figure', async (req, res) => {
-  const url = process.env.ANIMATED_DRAWINGS_URL
+  const url = getConfig().fulfill.animatedDrawingsUrl
   if (!url) { res.status(501).json({ error: 'animated-drawings 未配置' }); return }
   try {
     const r = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(req.body) })
