@@ -90,6 +90,19 @@ test('完整故事创作：分镜在真实浏览器里渲染并演出，回放�
     return xBefore != null && xNow != null && Math.abs(xNow - xBefore) > 50
   }, { timeout: 15000 }).toBe(true)
 
+  // 微动画"活起来"：一拍结束后角色持续轻微呼吸/摇摆——多次采样 rotation 或呼吸 w 应有变化
+  const pose = () => page.evaluate(() => {
+    const ed = (window as unknown as { __editor?: { getShape: (i: string) => { rotation: number; props: { w?: number } } | undefined } }).__editor
+    const s = ed?.getShape('shape:cat_head')
+    return s ? { rot: s.rotation, w: s.props?.w ?? 0 } : null
+  })
+  const samples: { rot: number; w: number }[] = []
+  for (let k = 0; k < 4; k++) { const p = await pose(); if (p) samples.push(p); await page.waitForTimeout(250) }
+  const rots = samples.map((s) => s.rot)
+  const ws = samples.map((s) => s.w)
+  const moved = Math.max(...rots) - Math.min(...rots) > 1e-4 || Math.max(...ws) - Math.min(...ws) > 1e-2
+  expect(moved, `idle 应让角色微动，rot=${JSON.stringify(rots)} w=${JSON.stringify(ws)}`).toBe(true)
+
   // 故事推进 + 回放按钮可用
   await expect(page.locator('.story-strip')).toContainText('抱住了皮球')
   const replay = page.locator('.kid-tools button[title="再演一遍"]')

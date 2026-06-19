@@ -4,6 +4,7 @@ import './App.css'
 import { SketchCanvas } from './sketch/SketchCanvas'
 import { toTldrawShape } from './sketch/renderSketch'
 import { playScenes, replayAll } from './animation/playScenes'
+import { startIdle } from './animation/idle'
 import { useVoice } from './voice/useVoice'
 import { requestCocreate } from './cocreate/cocreateClient'
 import { buildRequest } from './cocreate/buildRequest'
@@ -26,6 +27,28 @@ export default function App() {
   useEffect(() => { sessionRef.current = session }, [session])
   const restoredRef = useRef(false)
 
+  // 微动画("活起来")：idleStop 停止当前循环；idleIds 记录被微动的 record id（自动保存据此忽略）
+  const idleStopRef = useRef<(() => void) | null>(null)
+  const idleIdsRef = useRef<Set<string>>(new Set())
+
+  function stopIdle() {
+    idleStopRef.current?.()
+    idleStopRef.current = null
+    idleIdsRef.current = new Set()
+  }
+  /** 在画布现有的 AI 角色上(重)启微动 */
+  function restartIdle(s: SessionState = sessionRef.current) {
+    const editor = editorRef.current
+    if (!editor) return
+    stopIdle()
+    const ids = s.shapes
+      .map((sp) => sp.id)
+      .filter((id) => editor.getShape(`shape:${id}` as never))
+    if (!ids.length) return
+    idleIdsRef.current = new Set(ids.map((id) => `shape:${id}`))
+    idleStopRef.current = startIdle(editor, ids)
+  }
+
   function saveNow(s: SessionState = sessionRef.current) {
     const editor = editorRef.current
     if (!editor) return
@@ -41,6 +64,7 @@ export default function App() {
     editorRef.current = e
     if (import.meta.env.DEV) (window as unknown as { __editor?: Editor }).__editor = e
 
+    let restored: SessionState | null = null
     if (!restoredRef.current) {
       restoredRef.current = true
       try {
@@ -48,18 +72,31 @@ export default function App() {
         if (saved) {
           if (saved.snapshot) e.loadSnapshot(saved.snapshot as never)
           setSession(saved.session)
+          restored = saved.session
         }
       } catch (err) {
         console.warn('restore failed:', err)
       }
     }
     e.setCurrentTool('draw')
+    if (restored) restartIdle(restored) // 恢复后让已有角色"活起来"
 
     let timer = 0
     e.store.listen(
-      () => {
+      (entry) => {
+        // 只由微动引起的 shape 更新(无新增/删除、且全是 idle 管理的 id) → 不触发保存，避免防抖被持续重置
+        const ch = entry.changes as {
+          added: Record<string, unknown>; removed: Record<string, unknown>; updated: Record<string, unknown>
+        }
+        const updatedIds = Object.keys(ch.updated)
+        const onlyIdle =
+          Object.keys(ch.added).length === 0 &&
+          Object.keys(ch.removed).length === 0 &&
+          updatedIds.length > 0 &&
+          updatedIds.every((id) => idleIdsRef.current.has(id))
+        if (onlyIdle) return
         window.clearTimeout(timer)
-        timer = window.setTimeout(saveNow, 1000)
+        timer = window.setTimeout(() => saveNow(), 1000)
       },
       { scope: 'document', source: 'user' }
     )
@@ -68,6 +105,7 @@ export default function App() {
   async function handleNewStory() {
     if (phase !== 'idle') return
     const editor = editorRef.current
+    stopIdle()
     await clearCreation()
     setSession(emptySession())
     if (editor) {
@@ -94,6 +132,7 @@ export default function App() {
   async function runTurn(utterance: string) {
     const editor = editorRef.current
     if (!editor) return
+    stopIdle() // 微动会改位姿，先停，交给分镜引擎；本拍结束再重启
     const imageDataUrl = await exportCanvasPng()
     const payload = buildRequest({ imageDataUrl, childUtterance: utterance, history: session.dialog, shapes: session.shapes, guidance: session.guidance })
     const res = await requestCocreate(payload)
@@ -145,7 +184,8 @@ export default function App() {
       }
     }
     await speak(res.speak || res.askChild || '')
-    saveNow(merged) // 一拍结束立即保存本拍的 session（含画布快照）
+    saveNow(merged) // idle 已停，此时快照是干净基准位姿
+    restartIdle(merged) // 让新角色也"活起来"
   }
 
   async function handleReplay() {
@@ -157,11 +197,13 @@ export default function App() {
       ? { width: vp.w, height: vp.h, offsetX: vp.x, offsetY: vp.y }
       : { width: 1000, height: 700, offsetX: 0, offsetY: 0 }
     setPhase('replaying')
+    stopIdle()
     try {
       await replayAll(editor, session.scenes, canvas, { onNarrate: (t) => void speak(t) })
     } catch (err) {
       console.warn('replay failed:', err)
     } finally {
+      restartIdle()
       setPhase('idle')
     }
   }
