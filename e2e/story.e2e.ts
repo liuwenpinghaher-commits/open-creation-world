@@ -97,6 +97,14 @@ test('创作伙伴：AI 只激发不替画，孩子指定后让"孩子自己的�
     return x != null && Math.abs(x - (xBefore as number)) < 1
   }, { timeout: 8000 }).toBe(true)
 
+  // 成长小记（家长回顾）：统计孩子开口次数与产出清单
+  await page.locator('.kid-tools button[title="成长小记（给爸爸妈妈看）"]').click()
+  await expect(page.locator('.review-card')).toContainText('3 次') // 三拍孩子都开口
+  await expect(page.locator('.review-card')).toContainText('给它起名小火') // 孩子的产出信号
+  await expect(page.locator('.review-dims')).toContainText('想象力') // 锻炼到的能力
+  await page.locator('.review-close').click()
+  await expect(page.locator('.review-card')).toHaveCount(0)
+
   // 持久化：刷新后对话恢复（上一句激发仍在）
   await page.reload()
   await expect.poll(async () => page.evaluate(() => !!(window as unknown as { __editor?: unknown }).__editor)).toBe(true)

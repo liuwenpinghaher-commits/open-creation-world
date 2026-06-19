@@ -9,6 +9,7 @@ import { requestPartner } from './cocreate/cocreateClient'
 import { buildRequest } from './cocreate/buildRequest'
 import { applyPartner, emptySession } from './store/sessionStore'
 import { saveCreation, loadCreation, clearCreation } from './store/persist'
+import { summarizeSession } from './guidance/summary'
 import type { SessionState } from './types/cocreate'
 
 type Phase = 'idle' | 'recording' | 'thinking'
@@ -19,6 +20,7 @@ export default function App() {
   const [phase, setPhase] = useState<Phase>('idle')
   const [typed, setTyped] = useState('')
   const [hint, setHint] = useState('')
+  const [showReview, setShowReview] = useState(false)
   const { start, stop, speak } = useVoice()
 
   const sessionRef = useRef(session)
@@ -150,6 +152,7 @@ export default function App() {
 
   const micLabel = phase === 'thinking' ? '✏️ 我在听…' : phase === 'recording' ? '🔴 说完了，点我' : '🎙️ 点我说话'
   const lastPartner = [...session.dialog].reverse().find((d) => d.role === 'partner')
+  const review = summarizeSession(session)
 
   return (
     <div className="shenbi">
@@ -160,7 +163,31 @@ export default function App() {
         <button type="button" title="橡皮" onClick={() => setTool('eraser')}>🧽</button>
         <button type="button" title="撤销" onClick={undo}>↩️</button>
         <button type="button" title="新的一张" onClick={handleNewStory} disabled={phase !== 'idle'}>🆕</button>
+        <button type="button" title="成长小记（给爸爸妈妈看）" onClick={() => setShowReview(true)}>📋</button>
       </div>
+
+      {showReview ? (
+        <div className="review-mask" onClick={() => setShowReview(false)}>
+          <div className="review-card" onClick={(e) => e.stopPropagation()}>
+            <h2>今天的成长小记</h2>
+            <p className="review-stat">孩子主动开口/动手 <b>{review.childTurns}</b> 次</p>
+            {review.byDimension.length ? (
+              <div className="review-dims">
+                {review.byDimension.map((d) => (
+                  <span key={d.dimension} className="review-dim">{d.label} ×{d.count}</span>
+                ))}
+              </div>
+            ) : null}
+            <h3>孩子说了 / 想出了什么</h3>
+            {review.produced.length ? (
+              <ul className="review-list">{review.produced.map((p, i) => <li key={i}>{p}</li>)}</ul>
+            ) : (
+              <p className="review-empty">还没开始，先和孩子一起画一画、聊一聊吧～</p>
+            )}
+            <button type="button" className="review-close" onClick={() => setShowReview(false)}>知道啦</button>
+          </div>
+        </div>
+      ) : null}
 
       {lastPartner ? <div className="partner-bubble">{lastPartner.text}</div> : null}
       {phase === 'thinking' ? <div className="thinking-overlay">✨ 我在想…</div> : null}
