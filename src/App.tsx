@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { toRichText, type Editor } from 'tldraw'
 import './App.css'
 import { SketchCanvas } from './sketch/SketchCanvas'
@@ -23,14 +23,14 @@ export default function App() {
 
   // 持久化：sessionRef 给保存用（避免闭包过期）；restoredRef 防重复恢复
   const sessionRef = useRef(session)
-  sessionRef.current = session
+  useEffect(() => { sessionRef.current = session }, [session])
   const restoredRef = useRef(false)
 
-  function saveNow() {
+  function saveNow(s: SessionState = sessionRef.current) {
     const editor = editorRef.current
     if (!editor) return
     try {
-      void saveCreation(sessionRef.current, editor.getSnapshot())
+      void saveCreation(s, editor.getSnapshot())
     } catch (err) {
       console.warn('save failed:', err)
     }
@@ -145,7 +145,7 @@ export default function App() {
       }
     }
     await speak(res.speak || res.askChild || '')
-    saveNow() // 一拍结束立即保存（含画布快照）
+    saveNow(merged) // 一拍结束立即保存本拍的 session（含画布快照）
   }
 
   async function handleReplay() {
