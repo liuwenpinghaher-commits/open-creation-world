@@ -15,6 +15,7 @@ import { summarizeSession } from './guidance/summary'
 import { Settings } from './settings/Settings'
 import { ChildPicker } from './settings/ChildPicker'
 import { buildChildContext, moveOptsFrom } from './settings/childContext'
+import { shouldAutoTurn, shouldAutoStory, shouldSendImage, storyMap, filterWorksByChild, sceneNoteOf } from './app/orchestration'
 import { getActiveChildId, listProfiles, getPrefs, getSafety, getPrivacy, saveStory, saveProfile, getStory, listStories } from './store/family'
 import { defaultPrefs, defaultSafety, type ChildContext, type LearningStory } from './types/settings'
 import type { SessionState } from './types/cocreate'
@@ -118,16 +119,15 @@ export default function App() {
 
   /** B4：一张画聊过了就自动生成学习故事（已有则跳过），让成长报告自动闭环 */
   async function autoStory(workId: string, sess: SessionState) {
-    if (!workId || !sess.dialog.some((d) => d.role === 'child')) return
-    if (await getStory(workId)) return
+    if (!workId) return
+    if (!shouldAutoStory(sess.dialog, !!(await getStory(workId)))) return
     await makeStory({ id: workId, session: sess, createdAt: 0, updatedAt: 0, childId: activeChildRef.current })
   }
 
   /** B1：孩子画完停顿 → 自动发起一拍（仅凭画就回应，不必开口） */
   function maybeAutoTurn() {
     const e = editorRef.current
-    if (!e || phaseRef.current !== 'idle' || !dirtyRef.current) return
-    if (e.getCurrentPageShapeIds().size === 0) return
+    if (!e || !shouldAutoTurn(phaseRef.current, dirtyRef.current, e.getCurrentPageShapeIds().size)) return
     setPhase('thinking')
     runTurn('').catch((err) => console.warn('auto turn failed:', err)).finally(() => setPhase('idle'))
   }
@@ -173,12 +173,8 @@ export default function App() {
   }
 
   async function refreshJournal() {
-    const works = (await listWorks()).filter((w) => !activeChildRef.current || w.childId === activeChildRef.current)
-    const ss = await listStories(activeChildRef.current)
-    const map: Record<string, { narrative: string; highlights: string[] }> = {}
-    for (const s of ss) map[s.workId] = { narrative: s.narrative, highlights: s.highlights }
-    setStories(map)
-    setJournal(works)
+    setStories(storyMap(await listStories(activeChildRef.current)))
+    setJournal(filterWorksByChild(await listWorks(), activeChildRef.current))
   }
   async function openJournal() { await refreshJournal() } // B2 按孩子过滤 + B5 加载已存故事
 
@@ -266,13 +262,13 @@ export default function App() {
     const drew = dirtyRef.current // 这一拍孩子是否动过笔
     const shapeCount = editor.getCurrentPageShapeIds().size
     // 隐私模式：不上传画面，仅凭语音引导
-    const imageDataUrl = drew && !privacyRef.current ? await exportCanvasPng() : undefined
+    const imageDataUrl = shouldSendImage(drew, privacyRef.current) ? await exportCanvasPng() : undefined
     if (imageDataUrl) dirtyRef.current = false
 
     // 节奏自适应：结合孩子这句 + 是否在画，判断卡住/投入，决定降难度+加支架
     const childUtts = sessionRef.current.dialog.filter((d) => d.role === 'child').map((d) => d.text)
     const move = nextMove(sessionRef.current.guidance, readEngagement([...childUtts, utterance], drew), moveOptsRef.current)
-    const res = await requestPartner(buildRequest({ imageDataUrl, childUtterance: utterance, history: sessionRef.current.dialog, move, hasDrawing: shapeCount > 0, childContext: childCtxRef.current, sceneNote: sessionRef.current.sceneNote }))
+    const res = await requestPartner(buildRequest({ imageDataUrl, childUtterance: utterance, history: sessionRef.current.dialog, move, hasDrawing: shapeCount > 0, childContext: childCtxRef.current, sceneNote: sceneNoteOf(sessionRef.current) }))
 
     // 防"假兑现"：要求兑现但画布空 → 不动画、改说引导先画。说什么就存什么（说=气泡=成长册）
     const decision = fulfillDecision(res, shapeCount)
