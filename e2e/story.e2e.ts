@@ -102,4 +102,15 @@ test('完整故事创作：分镜在真实浏览器里渲染并演出，回放�
     })
     return op != null && op > 0.5
   }, { timeout: 20000 }).toBe(true)
+
+  // M1 持久化：刷新后自动恢复创作（画布与故事仍在）
+  await page.reload()
+  await expect.poll(async () => (await page.evaluate(() => !!(window as unknown as { __editor?: unknown }).__editor))).toBe(true)
+  await expect.poll(() => shapeIds(page).then((ids) => ids.includes('shape:cat_head')), { timeout: 15000 }).toBe(true)
+  await expect(page.locator('.story-strip')).toContainText('橘色的小猫')
+
+  // 🆕 新故事：清空画布与故事
+  await page.locator('.kid-tools button[title="新故事"]').click()
+  await expect.poll(() => shapeIds(page).then((ids) => ids.length), { timeout: 10000 }).toBe(0)
+  await expect(page.locator('.story-strip')).toHaveText('')
 })

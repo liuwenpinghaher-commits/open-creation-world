@@ -1,7 +1,7 @@
 import type { CocreateResponse, Scene, SessionState, SketchShapeSpec } from '../types/cocreate'
 
 export function emptySession(): SessionState {
-  return { shapes: [], scenes: [], story: [], dialog: [] }
+  return { shapes: [], scenes: [], story: [], dialog: [], guidance: [] }
 }
 
 let storyCounter = 0
@@ -17,7 +17,15 @@ export function applyResponse(
 ): SessionState {
   let shapes: SketchShapeSpec[] = [...state.shapes]
 
-  if (res.addShapes) shapes.push(...res.addShapes)
+  if (res.addShapes) {
+    // M3：过滤掉与已有 id 冲突的新增，避免 createShape 重复 id 报错而丢形状
+    const seen = new Set(shapes.map((s) => s.id))
+    for (const sp of res.addShapes) {
+      if (seen.has(sp.id)) continue
+      seen.add(sp.id)
+      shapes.push(sp)
+    }
+  }
 
   if (res.modifyShapes) {
     for (const patch of res.modifyShapes) {
@@ -51,5 +59,9 @@ export function applyResponse(
   if (childUtterance) dialog.push({ role: 'child', text: childUtterance })
   if (res.speak) dialog.push({ role: 'system', text: res.speak })
 
-  return { shapes, scenes, story, dialog }
+  const guidance = res.guidanceIntent
+    ? [...state.guidance, res.guidanceIntent.dimension]
+    : state.guidance
+
+  return { shapes, scenes, story, dialog, guidance }
 }

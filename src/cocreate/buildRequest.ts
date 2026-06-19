@@ -17,11 +17,13 @@ export function buildRequest(input: {
   childUtterance: string
   history: SessionState['dialog']
   shapes?: SketchShapeSpec[]
+  guidance?: SessionState['guidance']
 }) {
   return {
     imageDataUrl: input.imageDataUrl,
     childUtterance: input.childUtterance,
     history: input.history.slice(-8),
     shapes: shapeInventory(input.shapes ?? []),
+    recentGuidance: (input.guidance ?? []).slice(-3),
   }
 }

@@ -1,4 +1,5 @@
 import type { CocreateResponse } from '../src/types/cocreate'
+import { sanitizeCocreate } from './sanitize'
 
 const SYSTEM_PROMPT = `你是"神笔马良"里的共创伙伴，陪 6-10 岁中国孩子用简笔画一起编**会演出剧情的小故事**。
 
@@ -48,47 +49,66 @@ function extractJson(text: string): string {
   return text.trim()
 }
 
-export async function callModel(input: {
-  imageDataUrl: string
-  childUtterance: string
-  history: { role: 'child' | 'system'; text: string }[]
-  shapes?: Array<{ id: string; kind: string }>
-}): Promise<CocreateResponse> {
-  const inventory = input.shapes?.length
-    ? `\n【画布已有元素，scenes 里的 shapeId 只能引用这些 id 或本拍新建的 id】：${JSON.stringify(input.shapes)}`
-    : ''
-  const userContent: Array<Record<string, unknown>> = [
-    { type: 'text', text: (input.childUtterance || '（孩子在画画，还没说话）') + inventory },
-  ]
-  if (input.imageDataUrl && input.imageDataUrl.startsWith('data:image')) {
-    userContent.push({ type: 'image_url', image_url: { url: input.imageDataUrl } })
+/** 解析成功返回对象，失败返回 null（供重试判断） */
+function tryParse(text: string): Record<string, unknown> | null {
+  try {
+    const v = JSON.parse(extractJson(text))
+    return typeof v === 'object' && v !== null ? (v as Record<string, unknown>) : null
+  } catch {
+    return null
   }
+}
 
-  const body = {
-    model: process.env.MODEL_ID,
-    messages: [
-      { role: 'system', content: SYSTEM_PROMPT },
-      ...input.history.map((h) => ({
-        role: h.role === 'child' ? 'user' : 'assistant',
-        content: h.text,
-      })),
-      { role: 'user', content: userContent },
-    ],
-    response_format: { type: 'json_object' },
-  }
-
+async function chat(messages: Array<Record<string, unknown>>): Promise<string> {
   const resp = await fetch(`${process.env.MODEL_BASE_URL}/chat/completions`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${process.env.MODEL_API_KEY}`,
     },
-    body: JSON.stringify(body),
+    body: JSON.stringify({ model: process.env.MODEL_ID, messages, response_format: { type: 'json_object' } }),
   })
   if (!resp.ok) throw new Error(`model error ${resp.status}: ${await resp.text()}`)
   const data = await resp.json()
-  const text = data.choices?.[0]?.message?.content ?? '{}'
-  const parsed = JSON.parse(extractJson(text)) as CocreateResponse
-  if (!parsed.speak) parsed.speak = parsed.askChild ?? '我们接着画吧！'
-  return parsed
+  return data.choices?.[0]?.message?.content ?? '{}'
+}
+
+export async function callModel(input: {
+  imageDataUrl: string
+  childUtterance: string
+  history: { role: 'child' | 'system'; text: string }[]
+  shapes?: Array<{ id: string; kind: string }>
+  recentGuidance?: string[]
+}): Promise<CocreateResponse> {
+  const inventory = input.shapes?.length
+    ? `\n【画布已有元素，scenes 里的 shapeId 只能引用这些 id 或本拍新建的 id】：${JSON.stringify(input.shapes)}`
+    : ''
+  const guidance = input.recentGuidance?.length
+    ? `\n【最近几拍引导过的维度：${input.recentGuidance.join('、')}。请轮换到别的维度、或这拍干脆不引导，不要重复同一维度，也不要每拍都引导。】`
+    : ''
+  const userContent: Array<Record<string, unknown>> = [
+    { type: 'text', text: (input.childUtterance || '（孩子在画画，还没说话）') + inventory + guidance },
+  ]
+  if (input.imageDataUrl && input.imageDataUrl.startsWith('data:image')) {
+    userContent.push({ type: 'image_url', image_url: { url: input.imageDataUrl } })
+  }
+
+  const messages: Array<Record<string, unknown>> = [
+    { role: 'system', content: SYSTEM_PROMPT },
+    ...input.history.map((h) => ({ role: h.role === 'child' ? 'user' : 'assistant', content: h.text })),
+    { role: 'user', content: userContent },
+  ]
+
+  const text = await chat(messages)
+  let parsed = tryParse(text)
+  if (!parsed) {
+    // 不是合法 JSON → 带纠错反馈重试一次
+    const retry = await chat([
+      ...messages,
+      { role: 'assistant', content: text },
+      { role: 'user', content: '你上面的回复不是合法的 JSON。请只输出一个 JSON 对象，不要任何额外文字、不要 markdown 代码块。' },
+    ])
+    parsed = tryParse(retry)
+  }
+  return sanitizeCocreate(parsed ?? {})
 }

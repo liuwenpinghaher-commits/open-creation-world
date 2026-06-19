@@ -75,4 +75,5 @@ export type SessionState = {
   scenes: Scene[] // 分镜时间线（累积）
   story: StoryEntry[]
   dialog: { role: 'child' | 'system'; text: string }[]
+  guidance: GuidanceDimension[] // 历次引导维度（用于轮换、避免重复）
 }

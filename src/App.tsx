@@ -8,6 +8,7 @@ import { useVoice } from './voice/useVoice'
 import { requestCocreate } from './cocreate/cocreateClient'
 import { buildRequest } from './cocreate/buildRequest'
 import { applyResponse, emptySession } from './store/sessionStore'
+import { saveCreation, loadCreation, clearCreation } from './store/persist'
 import type { SessionState } from './types/cocreate'
 
 type Phase = 'idle' | 'recording' | 'thinking' | 'replaying'
@@ -19,6 +20,61 @@ export default function App() {
   const [typed, setTyped] = useState('')
   const [hint, setHint] = useState('')
   const { start, stop, speak } = useVoice()
+
+  // 持久化：sessionRef 给保存用（避免闭包过期）；restoredRef 防重复恢复
+  const sessionRef = useRef(session)
+  sessionRef.current = session
+  const restoredRef = useRef(false)
+
+  function saveNow() {
+    const editor = editorRef.current
+    if (!editor) return
+    try {
+      void saveCreation(sessionRef.current, editor.getSnapshot())
+    } catch (err) {
+      console.warn('save failed:', err)
+    }
+  }
+
+  // editor 异步挂载后：恢复上次创作 + 监听画布涂改防抖自动保存
+  async function handleEditorMount(e: Editor) {
+    editorRef.current = e
+    if (import.meta.env.DEV) (window as unknown as { __editor?: Editor }).__editor = e
+
+    if (!restoredRef.current) {
+      restoredRef.current = true
+      try {
+        const saved = await loadCreation()
+        if (saved) {
+          if (saved.snapshot) e.loadSnapshot(saved.snapshot as never)
+          setSession(saved.session)
+        }
+      } catch (err) {
+        console.warn('restore failed:', err)
+      }
+    }
+    e.setCurrentTool('draw')
+
+    let timer = 0
+    e.store.listen(
+      () => {
+        window.clearTimeout(timer)
+        timer = window.setTimeout(saveNow, 1000)
+      },
+      { scope: 'document', source: 'user' }
+    )
+  }
+
+  async function handleNewStory() {
+    if (phase !== 'idle') return
+    const editor = editorRef.current
+    await clearCreation()
+    setSession(emptySession())
+    if (editor) {
+      const ids = [...editor.getCurrentPageShapeIds()]
+      if (ids.length) editor.deleteShapes(ids)
+    }
+  }
 
   function flashHint(msg: string) {
     setHint(msg)
@@ -39,7 +95,7 @@ export default function App() {
     const editor = editorRef.current
     if (!editor) return
     const imageDataUrl = await exportCanvasPng()
-    const payload = buildRequest({ imageDataUrl, childUtterance: utterance, history: session.dialog, shapes: session.shapes })
+    const payload = buildRequest({ imageDataUrl, childUtterance: utterance, history: session.dialog, shapes: session.shapes, guidance: session.guidance })
     const res = await requestCocreate(payload)
 
     const vp = editor.getViewportPageBounds()
@@ -50,6 +106,7 @@ export default function App() {
 
     for (const spec of res.addShapes ?? []) {
       try {
+        if (editor.getShape(`shape:${spec.id}` as never)) continue // M3：画布上已有同 id 则跳过
         if (spec.kind === 'text' && spec.text) {
           editor.createShape({
             id: `shape:${spec.id}`,
@@ -88,6 +145,7 @@ export default function App() {
       }
     }
     await speak(res.speak || res.askChild || '')
+    saveNow() // 一拍结束立即保存（含画布快照）
   }
 
   async function handleReplay() {
@@ -166,13 +224,7 @@ export default function App() {
 
   return (
     <div className="shenbi">
-      <SketchCanvas
-        onMount={(e) => {
-          editorRef.current = e
-          // 仅 dev：暴露给端到端测试驱动（生产构建不包含 import.meta.env.DEV 分支）
-          if (import.meta.env.DEV) (window as unknown as { __editor?: Editor }).__editor = e
-        }}
-      />
+      <SketchCanvas onMount={handleEditorMount} />
 
       <div className="kid-tools">
         <button type="button" title="画笔" onClick={() => setTool('draw')}>🖌️</button>
@@ -187,7 +239,12 @@ export default function App() {
         >
           ▶️
         </button>
+        <button type="button" title="新故事" onClick={handleNewStory} disabled={phase !== 'idle'}>
+          🆕
+        </button>
       </div>
+
+      {phase === 'thinking' ? <div className="thinking-overlay">✨ 我在想…</div> : null}
 
       <div className="story-strip">
         {session.story.map((e) => (
