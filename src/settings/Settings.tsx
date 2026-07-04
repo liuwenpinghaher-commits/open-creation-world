@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { GuidanceDimension } from '../types/cocreate'
 import type { ChildProfile, ContentSafety, GuidancePrefs } from '../types/settings'
 import { defaultPrefs, defaultSafety } from '../types/settings'
@@ -7,7 +7,8 @@ import {
   getPrefs, savePrefs, getSafety, saveSafety, getActiveChildId, setActiveChildId, getGate,
   getPrivacy, setPrivacy, listStories, setFamilyNote,
 } from '../store/family'
-import { listWorks } from '../store/persist'
+import { listWorks, deleteWorksByChild, clearCurrentId } from '../store/persist'
+import { deleteStoriesByChild } from '../store/family'
 import { aggregateStories, type ChildReport } from '../guidance/report'
 import type { GuidancePrefs as _GP, LearningStory } from '../types/settings'
 
@@ -39,6 +40,10 @@ function ParentGate({ onPass, onClose }: { onPass: () => void; onClose: () => vo
   const [gateMode, setGateMode] = useState<'arith' | 'pin'>('arith')
   const [pinHash, setPinHash] = useState<string | undefined>(undefined)
   const [err, setErr] = useState('')
+  // P2-13：真正校验"按住 2 秒"——中途松手/移出即取消，避免"点一下等 2 秒"就架空长按因子
+  const holdTimer = useRef<number | undefined>(undefined)
+  const startHold = () => { holdTimer.current = window.setTimeout(() => setHeld(true), 2000) }
+  const cancelHold = () => { if (holdTimer.current) { clearTimeout(holdTimer.current); holdTimer.current = undefined } }
 
   useEffect(() => { void getGate().then((g) => { setGateMode(g.mode); setPinHash(g.pinHash) }) }, [])
 
@@ -65,7 +70,10 @@ function ParentGate({ onPass, onClose }: { onPass: () => void; onClose: () => vo
             <p className="review-empty">长按下面按钮 2 秒，并算出：<b>{a} + {b} = ?</b></p>
             <button
               type="button" className="gate-hold"
-              onPointerDown={() => window.setTimeout(() => setHeld(true), 2000)}
+              onPointerDown={startHold}
+              onPointerUp={cancelHold}
+              onPointerLeave={cancelHold}
+              onPointerCancel={cancelHold}
             >{held ? '✅ 已长按' : '长按我 2 秒'}</button>
             <input className="gate-input" inputMode="numeric" placeholder="答案" value={ans} onChange={(e) => setAns(e.target.value)} />
           </>
@@ -129,7 +137,9 @@ export function Settings({ onClose, onChanged }: { onClose: () => void; onChange
 
   async function reloadProfiles(active?: string | null) {
     const ps = await listProfiles(); setProfiles(ps)
-    const aid = active ?? activeId ?? ps[0]?.id ?? null
+    // P3-18：区分"未传"与"显式传 null(重置)"。删当前孩子时传 null，应落到 ps[0]，
+    // 而不是被 `?? activeId` 回退到仍指向已删孩子的旧 state。
+    const aid = active !== undefined ? (active ?? ps[0]?.id ?? null) : (activeId ?? ps[0]?.id ?? null)
     setActiveId(aid)
     if (aid) setPrefs(await getPrefs(aid))
   }
@@ -148,7 +158,16 @@ export function Settings({ onClose, onChanged }: { onClose: () => void; onChange
     const p = { ...active, ...patch }; await saveProfile(p); await reloadProfiles(); onChanged()
   }
   async function switchChild(id: string) { await setActiveChildId(id); await reloadProfiles(id); onChanged() }
-  async function removeChild(id: string) { await deleteProfile(id); await setActiveChildId(null); await reloadProfiles(null); onChanged() }
+  async function removeChild(id: string) {
+    // P2-8：级联删除该孩子的档案/偏好/作品/学习故事/当前作品指针，别留孤儿数据与隐私残留
+    await deleteProfile(id)
+    await deleteWorksByChild(id)
+    await deleteStoriesByChild(id)
+    clearCurrentId(id)
+    await setActiveChildId(null)
+    await reloadProfiles(null)
+    onChanged()
+  }
   async function patchPrefs(patch: Partial<GuidancePrefs>) {
     if (!activeId) return
     const next = { ...prefs, ...patch }; setPrefs(next); await savePrefs(activeId, next); onChanged()
@@ -163,13 +182,24 @@ export function Settings({ onClose, onChanged }: { onClose: () => void; onChange
       voice: { sttEnabled: config?.voice.sttEnabled, ttsEnabled: config?.voice.ttsEnabled, ttsVoice: config?.voice.ttsVoice, ...(voiceKey ? { apiKey: voiceKey } : {}) },
       fulfill: config?.fulfill,
     }
-    const r = await fetch('/api/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
-    if (r.ok) { setConfig(await r.json()); setModelKey(''); setVoiceKey(''); setTestMsg('已保存') }
+    // P3-21：失败要有反馈——补 else 分支与 try/catch，别让家长以为存上了实则没存
+    try {
+      const r = await fetch('/api/config', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+      if (r.ok) { setConfig(await r.json()); setModelKey(''); setVoiceKey(''); setTestMsg('已保存') }
+      else setTestMsg('保存失败，请检查后端')
+    } catch { setTestMsg('保存失败（后端未连接？）') }
   }
   async function testConn() {
     setTestMsg('测试中…')
-    try { const r = await (await fetch('/api/config/test', { method: 'POST' })).json(); setTestMsg(r.ok ? '连接正常 ✅' : `失败：${r.status}`) }
-    catch { setTestMsg('连接失败') }
+    try {
+      // P3-22：先看外层 HTTP 状态，避免服务异常时读 body.status 显示"失败：undefined"
+      const resp = await fetch('/api/config/test', { method: 'POST' })
+      if (!resp.ok) { setTestMsg('连接失败（服务异常）'); return }
+      const r = await resp.json()
+      if (!r.ok) { setTestMsg(`模型连接失败：${r.status}`); return }
+      // P3-16：TTS 密钥独立，模型通了不代表语音通
+      setTestMsg(r.ttsOk === false ? '模型正常，但语音密钥可能有误 ⚠️' : '连接正常 ✅')
+    } catch { setTestMsg('连接失败（离线？）') }
   }
 
   const NAV: { k: typeof tab; label: string; icon: string }[] = [

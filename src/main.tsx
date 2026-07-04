@@ -8,4 +8,9 @@ window.addEventListener('error', (event) => {
   }
 })
 
+// P1-3：兜底未处理的 Promise 拒绝（如 Dexie 存盘失败逃逸的 async），至少留个日志、不静默吞掉。
+window.addEventListener('unhandledrejection', (event) => {
+  console.warn('[shenbi] unhandled rejection:', event.reason)
+})
+
 createRoot(document.getElementById('root')!).render(<App />)

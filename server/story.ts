@@ -41,20 +41,29 @@ export async function callStory(input: {
   const transcript = input.dialog.map((d) => `${d.role === 'child' ? '孩子' : '伙伴'}：${d.text}`).join('\n')
   const who = `${input.childName ?? '孩子'}（${input.age ?? '6-10'}岁）`
 
-  const resp = await fetch(`${model.baseUrl}/chat/completions`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${model.apiKey}` },
-    body: JSON.stringify({
-      model: model.id,
-      messages: [
-        { role: 'system', content: SYSTEM },
-        { role: 'user', content: `${who} 这次创作的对话：\n${transcript}` },
-      ],
-      response_format: { type: 'json_object' },
-    }),
-  })
-  if (!resp.ok) throw new Error(`story error ${resp.status}: ${await resp.text()}`)
-  const data = await resp.json()
+  // 上游卡住时不永久挂起，超时即 abort（P2-5）
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), 30000)
+  let data: { choices?: { message?: { content?: string } }[] }
+  try {
+    const resp = await fetch(`${model.baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${model.apiKey}` },
+      body: JSON.stringify({
+        model: model.id,
+        messages: [
+          { role: 'system', content: SYSTEM },
+          { role: 'user', content: `${who} 这次创作的对话：\n${transcript}` },
+        ],
+        response_format: { type: 'json_object' },
+      }),
+      signal: ctrl.signal,
+    })
+    if (!resp.ok) throw new Error(`story error ${resp.status}: ${await resp.text()}`)
+    data = await resp.json()
+  } finally {
+    clearTimeout(timer)
+  }
   const raw = (() => { try { return JSON.parse(extractJson(data.choices?.[0]?.message?.content ?? '{}')) } catch { return {} } })() as Record<string, unknown>
 
   const torranceRaw = (raw.tags as { torrance?: Record<string, unknown> })?.torrance ?? {}

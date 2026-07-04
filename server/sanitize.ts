@@ -45,3 +45,12 @@ export function sanitizePartner(
 
   return out
 }
+
+/** 让 config.fulfill 的全局开关/行为白名单真正作用于兑现（P3-23）：
+ *  关闭或行为不在白名单时清掉 fulfill，避免"配了却无效"的死配置。 */
+export function gateFulfill(res: PartnerResponse, policy: { enabled: boolean; behaviors: string[] }): PartnerResponse {
+  if (res.fulfill && (!policy.enabled || !policy.behaviors.includes(res.fulfill.behavior))) {
+    return { ...res, fulfill: null }
+  }
+  return res
+}

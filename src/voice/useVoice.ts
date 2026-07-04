@@ -32,7 +32,9 @@ export function useVoice() {
       headers: { 'Content-Type': blob.type || 'audio/webm' },
       body: await blob.arrayBuffer(),
     })
-    if (!resp.ok) return ''
+    // 非 2xx = 服务故障(密钥错/网络断)，抛给调用方走 serviceError 诊断；
+    // 别和"真没听清(200 + 空识别)"折叠成同一个空串，否则纯语音时后端全挂也只提示"没听清"（P2-10）
+    if (!resp.ok) throw new Error(`stt ${resp.status}`)
     const { text } = await resp.json()
     return text ?? ''
   }, [])

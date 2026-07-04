@@ -1,6 +1,6 @@
 import type { CrowdType, GuidanceDimension, PartnerResponse } from '../src/types/cocreate'
 import type { ChildContext } from '../src/types/settings'
-import { sanitizePartner } from './sanitize'
+import { sanitizePartner, gateFulfill } from './sanitize'
 import { getConfig } from './config'
 import { personalizeBlock } from './personalize'
 
@@ -87,14 +87,22 @@ function systemPrompt(move: { dimension: GuidanceDimension; crowd: CrowdType; su
 
 async function chat(messages: Array<Record<string, unknown>>): Promise<string> {
   const { model } = getConfig()
-  const resp = await fetch(`${model.baseUrl}/chat/completions`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${model.apiKey}` },
-    body: JSON.stringify({ model: model.id, messages, response_format: { type: 'json_object' } }),
-  })
-  if (!resp.ok) throw new Error(`model error ${resp.status}: ${await resp.text()}`)
-  const data = await resp.json()
-  return data.choices?.[0]?.message?.content ?? '{}'
+  // 上游卡住(慢/半开连接)时不让整拍永久挂起——超时即 abort→throw→前端进 serviceError（P2-5）
+  const ctrl = new AbortController()
+  const timer = setTimeout(() => ctrl.abort(), 30000)
+  try {
+    const resp = await fetch(`${model.baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${model.apiKey}` },
+      body: JSON.stringify({ model: model.id, messages, response_format: { type: 'json_object' } }),
+      signal: ctrl.signal,
+    })
+    if (!resp.ok) throw new Error(`model error ${resp.status}: ${await resp.text()}`)
+    const data = await resp.json()
+    return data.choices?.[0]?.message?.content ?? '{}'
+  } finally {
+    clearTimeout(timer)
+  }
 }
 
 function extractJson(text: string): string {
@@ -146,5 +154,8 @@ export async function callPartner(input: {
     ])
     parsed = tryParse(retry)
   }
-  return sanitizePartner(parsed ?? {}, input.move)
+  // 两次都解析不出 → 会返回兜底通用 provoke。至少留个信号，便于排查"模型没在看画"（P3-19）
+  if (!parsed) console.warn('[shenbi] partner: 两次解析仍失败，返回兜底 provoke（检查模型/response_format 配置）')
+  // 让 config.fulfill 全局开关/白名单真正生效（P3-23）
+  return gateFulfill(sanitizePartner(parsed ?? {}, input.move), getConfig().fulfill)
 }

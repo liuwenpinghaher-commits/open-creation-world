@@ -62,6 +62,16 @@ export function resolveConfig(env: NodeJS.ProcessEnv, jsonOverride?: DeepPartial
   return mergeInto(mergeInto(defaults(), fromEnv(env)), jsonOverride)
 }
 
+/** 只允许把密钥发往 https（走 TLS）或本机自托管，拒绝远程 http 明文——
+ *  防止改 baseUrl 把 `Authorization: Bearer <key>` 外发给攻击者端点（P2-6）。 */
+export function isAllowedBaseUrl(url: string): boolean {
+  let u: URL
+  try { u = new URL(url) } catch { return false }
+  if (u.protocol === 'https:') return true
+  if (u.protocol === 'http:' && ['localhost', '127.0.0.1', '::1'].includes(u.hostname)) return true
+  return false
+}
+
 /** 对外掩码：绝不回明文密钥 */
 export function maskConfig(cfg: ServerConfig) {
   const mask = (k: string) => ({ set: !!k, last4: k ? k.slice(-4) : '' })
@@ -93,6 +103,10 @@ export function getConfig(): ServerConfig {
 
 /** 写入 patch（空密钥=不变），合并进 config.json 并刷新缓存。返回掩码后的最新配置。 */
 export function saveConfig(patch: DeepPartial<ServerConfig>) {
+  // 防密钥外发：拒绝把 baseUrl 改成远程 http 明文端点（P2-6）
+  if (patch.model?.baseUrl !== undefined && !isAllowedBaseUrl(patch.model.baseUrl)) {
+    throw new Error('baseUrl 不被允许：仅支持 https 或本机 http 自托管')
+  }
   const current = readJson()
   // 合并 patch 到现有 json（空密钥不覆盖）
   const merged = mergeInto(mergeInto(defaults(), current), patch)

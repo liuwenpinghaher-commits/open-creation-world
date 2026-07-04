@@ -16,7 +16,7 @@ import { Settings } from './settings/Settings'
 import { ChildPicker } from './settings/ChildPicker'
 import { buildChildContext, moveOptsFrom } from './settings/childContext'
 import { shouldAutoTurn, shouldAutoStory, shouldSendImage, storyMap, filterWorksByChild, sceneNoteOf } from './app/orchestration'
-import { getActiveChildId, listProfiles, getPrefs, getSafety, getPrivacy, saveStory, saveProfile, getStory, listStories } from './store/family'
+import { getActiveChildId, listProfiles, getPrefs, getSafety, getPrivacy, saveStory, saveProfile, getStory, listStories, deleteStory } from './store/family'
 import { defaultPrefs, defaultSafety, type ChildContext, type LearningStory } from './types/settings'
 import type { SessionState } from './types/cocreate'
 
@@ -45,6 +45,8 @@ export default function App() {
   const [lastSpoken, setLastSpoken] = useState('') // 最近一句 AI 的话，供"再听一次"
   const [fallbackText, setFallbackText] = useState('') // A5：TTS 失败时临时显示文字兜底
   const [serviceError, setServiceError] = useState(false) // S2：AI 服务连不上（给家长的诊断）
+  const [saveError, setSaveError] = useState(false) // P1-3：存盘失败给家长可见信号（否则静默丢画）
+  const [storyBusy, setStoryBusy] = useState<string[]>([]) // P2-12：正在生成学习故事的作品（禁用按钮防连点）
   const { start, stop, speak } = useVoice()
 
   const phaseRef = useRef(phase) // 给 store.listen 等闭包读最新 phase
@@ -67,26 +69,36 @@ export default function App() {
   const activeProfileRef = useRef<import('./types/settings').ChildProfile | null>(null)
   const privacyRef = useRef(false)
   async function loadFamily() {
-    const prev = activeChildRef.current
+    // P1-2：先快照【旧身份】。收尾旧孩子的存盘/成文必须用切换前的 childId/profile，
+    // 不能等 ref 被改成新孩子后再读——否则旧孩子在画的作品与故事会被错标给新孩子。
+    const prevChild = activeChildRef.current
+    const prevProfile = activeProfileRef.current
+    const e = editorRef.current
+    let active: import('./types/settings').ChildProfile | null = null
+    let prefs = defaultPrefs()
+    let safety = defaultSafety()
     try {
       const profiles = await listProfiles()
       const aid = (await getActiveChildId()) ?? profiles[0]?.id ?? null
-      const active = profiles.find((p) => p.id === aid) ?? null
-      const prefs = active ? await getPrefs(active.id) : defaultPrefs()
-      const safety = await getSafety()
-      childCtxRef.current = buildChildContext(active, prefs, safety)
-      moveOptsRef.current = moveOptsFrom(prefs)
-      activeChildRef.current = active?.id
-      activeProfileRef.current = active
+      active = profiles.find((p) => p.id === aid) ?? null
+      prefs = active ? await getPrefs(active.id) : defaultPrefs()
+      safety = await getSafety()
       privacyRef.current = await getPrivacy()
-    } catch { childCtxRef.current = buildChildContext(null, defaultPrefs(), defaultSafety()) }
-    // B2：活跃孩子变了 + 画布已就绪 → 存当前(并自动成文) → 切到该孩子自己的作品
-    const e = editorRef.current
-    if (e && restoredRef.current && activeChildRef.current !== prev) {
-      saveNow()
-      void autoStory(workIdRef.current, sessionRef.current)
-      await openWorkForChild(e, activeChildRef.current ?? '')
+    } catch { active = null; prefs = defaultPrefs(); safety = defaultSafety() }
+
+    const switching = !!e && restoredRef.current && (active?.id) !== prevChild
+    // 切娃：ref 还指向旧孩子时，先用旧身份把上一张画存好 + 自动成文（B2/P1-2）
+    if (switching && e) {
+      saveNow(sessionRef.current, workIdRef.current, prevChild)
+      await autoStory(workIdRef.current, sessionRef.current, prevChild, prevProfile)
     }
+    // 收尾完旧孩子后，才提交新孩子的身份 refs
+    childCtxRef.current = buildChildContext(active, prefs, safety)
+    moveOptsRef.current = moveOptsFrom(prefs)
+    activeChildRef.current = active?.id
+    activeProfileRef.current = active
+    // 再切到新孩子自己"正在画的那张"
+    if (switching && e) await openWorkForChild(e, active?.id ?? '')
   }
 
   const sessionRef = useRef(session)
@@ -95,11 +107,28 @@ export default function App() {
   const dirtyRef = useRef(false) // 画布自上次感知后是否有改动（决定是否重新发图）
   const workIdRef = useRef<string>('') // 当前正在画的作品 id
   const suppressSaveRef = useRef(false) // 兑现动画期间挂起自动保存（避免动画帧刷屏/误存）
+  const saveTimerRef = useRef(0) // 防抖存盘 timer（提为 ref 便于切换作品时清除，P2-15）
+  const drawTimerRef = useRef(0) // 自动一拍 timer（同上）
+  const runningRef = useRef(false) // 同步起拍锁：防 drawTimer×手动起拍并发两拍（P2-14）
+  const saveErrRef = useRef(false) // saveError 的镜像，避免每秒存盘都重渲染
+  const storyBusyRef = useRef<Set<string>>(new Set()) // 生成学习故事 in-flight（同步去重，P2-12）
 
-  function saveNow(s: SessionState = sessionRef.current) {
+  function clearTimers() { window.clearTimeout(saveTimerRef.current); window.clearTimeout(drawTimerRef.current) }
+  function markSaveError(v: boolean) { if (saveErrRef.current !== v) { saveErrRef.current = v; setSaveError(v) } }
+  function markStoryBusy(id: string, busy: boolean) {
+    if (busy) storyBusyRef.current.add(id); else storyBusyRef.current.delete(id)
+    setStoryBusy([...storyBusyRef.current])
+  }
+
+  /** 落盘当前一拍。id/childId 可显式传入：在飞的一拍与切娃收尾要写回"本拍所属"的作品与孩子，
+   *  而不是读可能已被切换改写的 ref（P2-9/P1-2）。async 失败要真捕获并给可见信号（P1-3）。 */
+  function saveNow(s: SessionState = sessionRef.current, id: string = workIdRef.current, childId: string | undefined = activeChildRef.current) {
     const editor = editorRef.current
-    if (!editor || !workIdRef.current) return
-    try { void saveWork(workIdRef.current, s, editor.getSnapshot(), activeChildRef.current) } catch (err) { console.warn('save failed:', err) }
+    if (!editor || !id) return
+    if (suppressSaveRef.current) return // 兑现动画期间不落盘中间帧（P3-20）
+    saveWork(id, s, editor.getSnapshot(), childId)
+      .then(() => markSaveError(false))
+      .catch((err) => { console.warn('save failed:', err); markSaveError(true) })
   }
 
   /** 切到某个孩子"正在画的那张"（B2：作品按孩子分桶，互不串） */
@@ -108,29 +137,38 @@ export default function App() {
     workIdRef.current = id
     setCurrentId(childId, id)
     setCurrentWorkId(id)
-    const ids = [...e.getCurrentPageShapeIds()]; if (ids.length) e.deleteShapes(ids)
+    // 程序性清画/载图不算孩子改画：挂起 listen + 清掉 pending timer，避免对刚载入的画触发幽灵自动一拍（P2-15）
+    suppressSaveRef.current = true
     try {
+      const ids = [...e.getCurrentPageShapeIds()]; if (ids.length) e.deleteShapes(ids)
       const saved = await loadWork(id)
       if (saved) { if (saved.snapshot) e.loadSnapshot(saved.snapshot as never); setSession(saved.session) }
       else setSession(emptySession())
     } catch (err) { console.warn('open work failed:', err); setSession(emptySession()) }
-    dirtyRef.current = false
-    setHeard('')
+    finally {
+      clearTimers()
+      dirtyRef.current = false
+      suppressSaveRef.current = false
+      setHeard('')
+    }
   }
 
-  /** B4：一张画聊过了就自动生成学习故事（已有则跳过），让成长报告自动闭环 */
-  async function autoStory(workId: string, sess: SessionState) {
+  /** B4：一张画聊过了就自动生成学习故事（已有则跳过），让成长报告自动闭环。
+   *  childId/profile 显式传入：切娃收尾时要用【旧孩子】的身份成文（P1-2）。 */
+  async function autoStory(workId: string, sess: SessionState, childId = activeChildRef.current, profile = activeProfileRef.current) {
     if (!workId) return
     if (!shouldAutoStory(sess.dialog, !!(await getStory(workId)))) return
-    await makeStory({ id: workId, session: sess, createdAt: 0, updatedAt: 0, childId: activeChildRef.current })
+    await makeStory({ id: workId, session: sess, createdAt: 0, updatedAt: 0, childId }, profile, false)
   }
 
   /** B1：孩子画完停顿 → 自动发起一拍（仅凭画就回应，不必开口） */
   function maybeAutoTurn() {
     const e = editorRef.current
-    if (!e || !shouldAutoTurn(phaseRef.current, dirtyRef.current, e.getCurrentPageShapeIds().size)) return
+    if (!e || runningRef.current) return // P2-14：已有一拍在跑就不并发
+    if (!shouldAutoTurn(phaseRef.current, dirtyRef.current, e.getCurrentPageShapeIds().size)) return
+    runningRef.current = true
     setPhase('thinking')
-    runTurn('').catch((err) => console.warn('auto turn failed:', err)).finally(() => setPhase('idle'))
+    runTurn('').catch((err) => console.warn('auto turn failed:', err)).finally(() => { runningRef.current = false; setPhase('idle') })
   }
 
   async function handleEditorMount(e: Editor) {
@@ -142,13 +180,12 @@ export default function App() {
     }
     e.setCurrentTool('draw')
 
-    let saveTimer = 0, drawTimer = 0
     e.store.listen(
       () => {
-        if (suppressSaveRef.current) return // 兑现动画帧不算孩子改画，跳过
+        if (suppressSaveRef.current) return // 兑现动画帧/程序性载图不算孩子改画，跳过
         dirtyRef.current = true
-        window.clearTimeout(saveTimer); saveTimer = window.setTimeout(() => saveNow(), 1000)
-        window.clearTimeout(drawTimer); drawTimer = window.setTimeout(() => maybeAutoTurn(), 2600) // B1
+        window.clearTimeout(saveTimerRef.current); saveTimerRef.current = window.setTimeout(() => saveNow(), 1000)
+        window.clearTimeout(drawTimerRef.current); drawTimerRef.current = window.setTimeout(() => maybeAutoTurn(), 2600) // B1
       },
       { scope: 'document', source: 'user' }
     )
@@ -160,6 +197,7 @@ export default function App() {
     if (phase !== 'idle') return
     const editor = editorRef.current
     void autoStory(workIdRef.current, sessionRef.current)
+    clearTimers() // 换新前清掉 pending 存盘/自动一拍，避免落到新作品（P2-15）
     const id = newWorkId()
     workIdRef.current = id
     setCurrentId(activeChildRef.current ?? '', id)
@@ -181,36 +219,54 @@ export default function App() {
 
   async function openWork(id: string) {
     const editor = editorRef.current
-    if (!editor) return
+    if (!editor || phase !== 'idle') return // P2-9：在飞的一拍时不切，避免其收尾 saveNow 写错作品
     saveNow() // 先存好当前这张
     const saved = await loadWork(id)
     if (!saved) return
     workIdRef.current = id
     setCurrentId(activeChildRef.current ?? '', id)
     setCurrentWorkId(id)
+    suppressSaveRef.current = true
     const ids = [...editor.getCurrentPageShapeIds()]
     if (ids.length) editor.deleteShapes(ids)
     if (saved.snapshot) editor.loadSnapshot(saved.snapshot as never)
     setSession(saved.session)
+    clearTimers()
     dirtyRef.current = false
+    suppressSaveRef.current = false
     setJournal(null)
   }
 
   async function removeWork(id: string) {
     await deleteWork(id)
-    if (id === workIdRef.current) await handleNewStory()
+    await deleteStory(`s_${id}`) // P2-8：级联删对应学习故事，避免悬空污染成长报告统计
+    if (id === workIdRef.current) {
+      // P2-9：删"正在画的那张"要无条件重置（不走被 phase 守卫短路的 handleNewStory），
+      // 否则在飞/防抖的 saveNow 会把已删作品复活。
+      clearTimers()
+      const nid = newWorkId()
+      workIdRef.current = nid
+      setCurrentId(activeChildRef.current ?? '', nid)
+      setCurrentWorkId(nid)
+      setSession(emptySession())
+      dirtyRef.current = false
+      const editor = editorRef.current
+      if (editor) { const ids = [...editor.getCurrentPageShapeIds()]; if (ids.length) editor.deleteShapes(ids) }
+    }
     await refreshJournal()
   }
 
-  /** 生成学习故事（Learning Stories）：生成强项导向叙事，持久化，并把检测到的兴趣并入孩子档案 */
-  async function makeStory(w: WorkRecord) {
+  /** 生成学习故事（Learning Stories）：生成强项导向叙事，持久化，并把检测到的兴趣并入孩子档案。
+   *  profile 显式传入（切娃收尾用旧孩子）；manual=家长手动点，失败要给可见反馈（P2-11）。 */
+  async function makeStory(w: WorkRecord, profile = activeProfileRef.current, manual = false) {
+    if (storyBusyRef.current.has(w.id)) return // P2-12：in-flight 去重，防连点多次调 LLM 白花钱
+    markStoryBusy(w.id, true)
     try {
-      const profile = activeProfileRef.current
       const r = await fetch('/api/story', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ dialog: w.session.dialog, childName: profile?.name, age: profile?.age }),
       })
-      if (!r.ok) return
+      if (!r.ok) { if (manual) flashHint('学习故事没生成成功，去设置·系统检查密钥/网络后再试～'); return } // P2-11
       const data = await r.json() as { narrative: string; highlights?: string[]; tags?: LearningStory['tags']; interests?: string[] }
       setStories((s) => ({ ...s, [w.id]: { narrative: data.narrative, highlights: data.highlights ?? [] } }))
 
@@ -222,15 +278,19 @@ export default function App() {
       }
       await saveStory(story)
 
-      // 兴趣自动识别：把检测到的新主题并入活跃孩子档案
+      // 兴趣自动识别：写回前重读最新档案，避免覆盖家长这几秒内的改名/改兴趣（P3-17 lost-update）
       if (data.interests?.length && profile) {
-        const merged = Array.from(new Set([...profile.interests, ...data.interests])).slice(0, 12)
-        if (merged.length !== profile.interests.length) {
-          await saveProfile({ ...profile, interests: merged })
-          await loadFamily()
+        const fresh = (await listProfiles()).find((p) => p.id === profile.id)
+        if (fresh) {
+          const merged = Array.from(new Set([...fresh.interests, ...data.interests])).slice(0, 12)
+          if (merged.length !== fresh.interests.length) {
+            await saveProfile({ ...fresh, interests: merged })
+            await loadFamily()
+          }
         }
       }
-    } catch (err) { console.warn('story failed:', err) }
+    } catch (err) { console.warn('story failed:', err); if (manual) flashHint('学习故事没生成成功，稍后再试～') } // P2-11
+    finally { markStoryBusy(w.id, false) }
   }
 
   function flashHint(msg: string) {
@@ -258,6 +318,9 @@ export default function App() {
   async function runTurn(utterance: string) {
     const editor = editorRef.current
     if (!editor) return
+    // P2-9：快照本拍所属的作品与孩子——收尾只写回它，即使拍进行中被切娃/切作品也不会张冠李戴
+    const wid = workIdRef.current
+    const wcid = activeChildRef.current
 
     setHeard(utterance) // P4：回显"我听到你说…"，听错可纠正
     const drew = dirtyRef.current // 这一拍孩子是否动过笔
@@ -284,7 +347,8 @@ export default function App() {
     setSession(merged)
 
     if (decision.behavior) {
-      const png = await exportCanvasPng()
+      // P1-4：隐私模式不导出/上传画面（豪华兑现会把画 POST 给外部 AD 服务）——降级到纯本地木偶动画
+      const png = privacyRef.current ? null : await exportCanvasPng()
       const video = png ? await tryFigureAnimation(png) : null
       if (video) {
         setFigureVideo(video)
@@ -304,12 +368,15 @@ export default function App() {
     } else {
       await speakLine(decision.line)
     }
-    saveNow(merged)
+    saveNow(merged, wid, wcid) // 只写回本拍所属作品/孩子（P2-9）
   }
 
   async function handleMic() {
     if (phase === 'thinking') return
     if (phase === 'recording') {
+      if (runningRef.current) return // P2-14：起拍同步锁
+      runningRef.current = true
+      clearTimers() // 手动起拍，清掉可能待触发的自动一拍（P2-15）
       setPhase('thinking')
       try {
         const text = await stop()
@@ -317,8 +384,9 @@ export default function App() {
         else flashHint('没听清，再说一次，或在右边打字告诉我～')
       } catch (err) {
         console.error('voice turn failed:', err)
-        flashHint('语音出了点小问题，先用打字试试吧～')
-      } finally { setPhase('idle') }
+        setServiceError(true) // P2-10：STT/一拍服务故障也给家长诊断入口（别只提示"没听清"）
+        flashHint('语音服务连不上，先用打字，或点上方 ⚠️ 去设置检查～')
+      } finally { runningRef.current = false; setPhase('idle') }
     } else {
       try { await start(); setPhase('recording') }
       catch (err) { console.error('mic start failed:', err); flashHint('打不开麦克风，检查一下浏览器麦克风权限～'); setPhase('idle') }
@@ -326,13 +394,15 @@ export default function App() {
   }
 
   function submitTyped() {
-    if (phase === 'thinking' || !typed.trim()) return
+    if (phase === 'thinking' || !typed.trim() || runningRef.current) return // P2-14：起拍同步锁
     const t = typed.trim()
     setTyped('')
+    runningRef.current = true
+    clearTimers() // 手动起拍，清掉可能待触发的自动一拍（P2-15）
     setPhase('thinking')
     runTurn(t)
       .catch((err) => { console.error('typed turn failed:', err); flashHint('刚才没成功，再试一次～') })
-      .finally(() => setPhase('idle'))
+      .finally(() => { runningRef.current = false; setPhase('idle') })
   }
 
   function setTool(name: 'draw' | 'eraser' | 'select') { editorRef.current?.setCurrentTool(name) }
@@ -363,6 +433,12 @@ export default function App() {
       {serviceError ? (
         <button type="button" className="svc-error" onClick={() => { setServiceError(false); setShowSettings(true) }}>
           ⚠️ AI 暂时连不上——点我去「设置·系统」检查密钥/网络
+        </button>
+      ) : null}
+
+      {saveError ? (
+        <button type="button" className="svc-error save-error" onClick={() => { markSaveError(false); saveNow() }}>
+          ⚠️ 刚才没保存上——点我重试（检查浏览器存储空间/是否无痕模式）
         </button>
       ) : null}
 
@@ -415,10 +491,12 @@ export default function App() {
                           </button>
                         ) : null}
                         {w.session.dialog.some((d) => d.role === 'child') && !stories[w.id] ? (
-                          <button type="button" onClick={() => makeStory(w)}>✨生成学习故事</button>
+                          <button type="button" disabled={storyBusy.includes(w.id)} onClick={() => makeStory(w, activeProfileRef.current, true)}>
+                            {storyBusy.includes(w.id) ? '生成中…' : '✨生成学习故事'}
+                          </button>
                         ) : null}
-                        {w.id === currentWorkId ? null : <button type="button" onClick={() => openWork(w.id)}>打开</button>}
-                        <button type="button" className="journal-del" onClick={() => removeWork(w.id)}>删除</button>
+                        {w.id === currentWorkId ? null : <button type="button" disabled={phase !== 'idle'} onClick={() => openWork(w.id)}>打开</button>}
+                        <button type="button" className="journal-del" disabled={phase !== 'idle'} onClick={() => removeWork(w.id)}>删除</button>
                       </div>
                     </li>
                   )

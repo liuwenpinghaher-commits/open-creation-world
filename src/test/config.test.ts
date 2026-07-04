@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { describe, it, expect } from 'vitest'
-import { resolveConfig, maskConfig } from '../../server/config'
+import { resolveConfig, maskConfig, isAllowedBaseUrl } from '../../server/config'
 
 describe('resolveConfig 三层合并', () => {
   it('空环境用默认', () => {
@@ -35,5 +35,23 @@ describe('maskConfig 不回明文密钥', () => {
     expect(m.model.apiKey).toEqual({ set: true, last4: '1234' })
     expect(m.voice.apiKey).toEqual({ set: false, last4: '' })
     expect(JSON.stringify(m)).not.toContain('abcd1234')
+  })
+})
+
+describe('isAllowedBaseUrl 防把 Bearer 密钥外发（P2-6）', () => {
+  it('允许 https（密钥走 TLS）', () => {
+    expect(isAllowedBaseUrl('https://dashscope.aliyuncs.com/compatible-mode/v1')).toBe(true)
+  })
+  it('允许本机 http 自托管', () => {
+    expect(isAllowedBaseUrl('http://127.0.0.1:1234/v1')).toBe(true)
+    expect(isAllowedBaseUrl('http://localhost:1234/v1')).toBe(true)
+  })
+  it('拒绝远程 http 明文（防把密钥发给攻击者端点）', () => {
+    expect(isAllowedBaseUrl('http://attacker.example/v1')).toBe(false)
+  })
+  it('拒绝非法/非 http(s) URL', () => {
+    expect(isAllowedBaseUrl('not a url')).toBe(false)
+    expect(isAllowedBaseUrl('ftp://x/y')).toBe(false)
+    expect(isAllowedBaseUrl('')).toBe(false)
   })
 })

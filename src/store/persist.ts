@@ -32,6 +32,10 @@ export function getCurrentId(childId = ''): string | null {
 export function setCurrentId(childId: string, id: string): void {
   try { localStorage.setItem(CURRENT_PREFIX + childId, id) } catch { /* 无 localStorage 时忽略 */ }
 }
+/** 删档时清掉该孩子的"当前作品"指针，避免遗留孤儿键 */
+export function clearCurrentId(childId: string): void {
+  try { localStorage.removeItem(CURRENT_PREFIX + childId) } catch { /* 无 localStorage 时忽略 */ }
+}
 
 export async function saveWork(id: string, session: SessionState, snapshot: unknown, childId?: string): Promise<void> {
   const now = Date.now()
@@ -44,12 +48,18 @@ export async function loadWork(id: string): Promise<{ session: SessionState; sna
   return w ? { session: w.session, snapshot: w.snapshot } : null
 }
 
-/** 全部作品的轻量元信息 + session（用于成长册聚合），按最近更新降序 */
+/** 全部作品的轻量元信息 + session（用于成长册聚合），按最近更新降序。
+ *  必须带 childId：下游 filterWorksByChild 按它分桶，漏掉则有活跃孩子时成长册恒空。 */
 export async function listWorks(): Promise<WorkRecord[]> {
   const all = await db.works.orderBy('updatedAt').reverse().toArray()
-  return all.map((w) => ({ id: w.id, session: w.session, createdAt: w.createdAt, updatedAt: w.updatedAt }))
+  return all.map((w) => ({ id: w.id, session: w.session, createdAt: w.createdAt, updatedAt: w.updatedAt, childId: w.childId }))
 }
 
 export async function deleteWork(id: string): Promise<void> {
   await db.works.delete(id)
+}
+
+/** 删孩子档案时级联删掉其全部作品（childId 未建索引，用 filter 扫描删） */
+export async function deleteWorksByChild(childId: string): Promise<void> {
+  await db.works.filter((w) => w.childId === childId).delete()
 }

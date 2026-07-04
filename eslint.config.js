@@ -16,6 +16,8 @@ export default tseslint.config(
       ...reactHooks.configs.recommended.rules,
       'react-refresh/only-export-components': ['warn', { allowConstantExport: true }],
       '@typescript-eslint/no-explicit-any': 'off', // tldraw 互操作处确有 any/never 强转
+      // `_` 前缀 = 刻意未用（如 Express 错误中间件必须的 4 参、解构丢弃项）
+      '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }],
     },
   },
   // 后端 + 配置（Node 环境）
@@ -23,5 +25,8 @@ export default tseslint.config(
     files: ['server/**/*.ts', 'e2e/**/*.ts', '*.config.{ts,js}'],
     extends: [js.configs.recommended, ...tseslint.configs.recommended],
     languageOptions: { ecmaVersion: 2022, globals: globals.node },
+    rules: {
+      '@typescript-eslint/no-unused-vars': ['error', { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }],
+    },
   },
 )

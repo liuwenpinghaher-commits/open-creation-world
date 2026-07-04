@@ -65,6 +65,12 @@ export async function listStories(childId?: string): Promise<LearningStory[]> {
 export async function getStory(workId: string): Promise<LearningStory | undefined> {
   return db.stories.get(`s_${workId}`)
 }
+/** 删作品时级联删掉其学习故事，避免悬空故事污染成长报告统计 */
+export async function deleteStory(id: string): Promise<void> { await db.stories.delete(id) }
+/** 删孩子档案时级联删掉其全部学习故事（childId 已建索引） */
+export async function deleteStoriesByChild(childId: string): Promise<void> {
+  await db.stories.where('childId').equals(childId).delete()
+}
 export async function setFamilyNote(storyId: string, note: string): Promise<void> {
   const s = await db.stories.get(storyId)
   if (s) await db.stories.put({ ...s, familyNote: note })

@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import 'fake-indexeddb/auto'
-import { saveWork, loadWork, listWorks, deleteWork, newWorkId, getCurrentId, setCurrentId } from '../store/persist'
+import { saveWork, loadWork, listWorks, deleteWork, deleteWorksByChild, newWorkId, getCurrentId, setCurrentId, clearCurrentId } from '../store/persist'
 import { applyPartner, emptySession } from '../store/sessionStore'
+import { filterWorksByChild } from '../app/orchestration'
 
 function workWith(signal: string) {
   return applyPartner(emptySession(), {
@@ -51,6 +52,43 @@ describe('persist 多作品', () => {
     await saveWork(id, emptySession(), {})
     await deleteWork(id)
     expect(await loadWork(id)).toBeNull()
+  })
+
+  it('P1-1：listWorks 保留 childId（分桶字段不能丢，否则成长册按孩子过滤后恒空）', async () => {
+    const id = newWorkId()
+    await saveWork(id, emptySession(), { doc: 1 }, 'childA')
+    const list = await listWorks()
+    expect(list.find((w) => w.id === id)!.childId).toBe('childA')
+  })
+
+  it('P1-1 集成：有活跃孩子时成长册过滤命中该孩子的作品（此前 listWorks 丢 childId 导致恒空）', async () => {
+    const a = newWorkId(); const b = newWorkId()
+    await saveWork(a, emptySession(), {}, 'childA')
+    await saveWork(b, emptySession(), {}, 'childB')
+    const filtered = filterWorksByChild(await listWorks(), 'childA')
+    expect(filtered.map((w) => w.id)).toEqual([a]) // 只出 childA 的，不再是空数组
+  })
+
+  it('P2-8：deleteWorksByChild 删掉该孩子全部作品，不动别的孩子（删档级联）', async () => {
+    const a = newWorkId(); const b = newWorkId(); const c = newWorkId()
+    await saveWork(a, emptySession(), {}, 'A')
+    await saveWork(b, emptySession(), {}, 'A')
+    await saveWork(c, emptySession(), {}, 'B')
+    await deleteWorksByChild('A')
+    expect((await listWorks()).map((w) => w.id)).toEqual([c])
+  })
+
+  it('P2-8：clearCurrentId 清掉该孩子的当前作品指针', () => {
+    const store = new Map<string, string>()
+    vi.stubGlobal('localStorage', {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => { store.set(k, v) },
+      removeItem: (k: string) => { store.delete(k) },
+    })
+    setCurrentId('childA', 'wA')
+    clearCurrentId('childA')
+    expect(getCurrentId('childA')).toBeNull()
+    vi.unstubAllGlobals()
   })
 
   it('B2：当前作品指针按孩子分桶，互不串', () => {
