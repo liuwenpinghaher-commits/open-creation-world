@@ -1,16 +1,34 @@
 import { defineConfig, devices } from '@playwright/test'
 
-// 真实浏览器端到端：用确定性 API 桩驱动完整故事创作，验证 tldraw 真渲染 + 分镜演出 + 回放。
+/**
+ * 全量 E2E：真实 Chromium + Vite :3400
+ * API 由各用例 page.route 桩，可不启 dev:server
+ * 方案见 docs/e2e-全量测试方案.md
+ */
+const e2ePort = Number(process.env.E2E_PORT || 18400)
+const baseURL = process.env.E2E_BASE_URL || `http://127.0.0.1:${e2ePort}`
+
 export default defineConfig({
   testDir: './e2e',
   testMatch: '**/*.e2e.ts',
-  timeout: 60000,
-  use: { baseURL: 'http://127.0.0.1:3400', headless: true },
-  projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
-  webServer: {
-    command: 'npm run dev:web',
-    url: 'http://127.0.0.1:3400',
-    reuseExistingServer: true,
-    timeout: 60000,
+  timeout: 90_000,
+  expect: { timeout: 12_000 },
+  fullyParallel: true,
+  workers: 2,
+  reporter: [['list'], ['html', { open: 'never', outputFolder: 'playwright-report' }]],
+  use: {
+    baseURL,
+    headless: true,
+    trace: 'on-first-retry',
+    screenshot: 'only-on-failure',
   },
+  projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }],
+  webServer: process.env.E2E_SKIP_SERVER
+    ? undefined
+    : {
+        command: `VITE_PORT=${e2ePort} npm run dev:web`,
+        url: baseURL,
+        reuseExistingServer: false,
+        timeout: 90_000,
+      },
 })

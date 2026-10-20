@@ -5,7 +5,7 @@ dotenv.config({ path: join(dirname(fileURLToPath(import.meta.url)), '.env'), ove
 
 import express from 'express'
 import { callPartner } from './partner'
-import { transcribe, synthesize } from './voice'
+import { transcribe, synthesize, synthesizeChunks } from './voice'
 import { getConfig, saveConfig, maskConfig } from './config'
 import { callStory } from './story'
 
@@ -47,6 +47,10 @@ app.post('/api/config/test', async (_req, res) => {
   try {
     const cfg = getConfig()
     const { model } = cfg
+    if (!model.apiKey) {
+      res.json({ ok: true, status: 200, demoMode: true, ttsOk: false })
+      return
+    }
     const r = await fetch(`${model.baseUrl}/chat/completions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${model.apiKey}` },
@@ -83,6 +87,23 @@ app.post('/api/tts', async (req, res) => {
     res.send(audio)
   } catch (e) {
     fail(res, 'tts', e)
+  }
+})
+
+/** 流式感：JSON { chunks: string[] } → { parts: [{ mime, audioBase64 }] } */
+app.post('/api/tts-chunks', async (req, res) => {
+  try {
+    const chunks = (req.body as { chunks?: string[] }).chunks ?? []
+    const parts = await synthesizeChunks(chunks)
+    res.json({
+      parts: parts.map((p) => ({
+        mime: p.mime,
+        audioBase64: p.audio.toString('base64'),
+        text: p.text,
+      })),
+    })
+  } catch (e) {
+    fail(res, 'tts-chunks', e)
   }
 })
 

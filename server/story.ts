@@ -38,8 +38,25 @@ export async function callStory(input: {
   dialog: { role: 'child' | 'partner'; text: string }[]
 }): Promise<StoryResult> {
   const { model } = getConfig()
-  const transcript = input.dialog.map((d) => `${d.role === 'child' ? '孩子' : '伙伴'}：${d.text}`).join('\n')
+  const childLines = (input.dialog || [])
+    .filter((d) => d.role === 'child' && d.text.trim())
+    .map((d) => d.text.trim())
   const who = `${input.childName ?? '孩子'}（${input.age ?? '6-10'}岁）`
+
+  if (!model.apiKey) {
+    const quote = childLines[0] ? `「${childLines[0]}」` : '充满奇思妙想的画作'
+    return {
+      narrative: `今天${who}在画板前投入地创作，主动分享了${quote}。顺着伙伴的追问，一步步丰富了画面的细节与故事脉络，展现出满满的好奇心与表达欲。`,
+      highlights: childLines.length > 0 ? childLines.slice(0, 3) : ['认真画出第一笔并参与对话共创'],
+      tags: {
+        torrance: { fluency: 2, flexibility: 2, originality: 2, elaboration: 2 },
+        dispositions: ['好奇', '爱表达'],
+      },
+      interests: childLines.length > 0 ? [childLines[0].slice(0, 6)] : ['创意绘画'],
+    }
+  }
+
+  const transcript = input.dialog.map((d) => `${d.role === 'child' ? '孩子' : '伙伴'}：${d.text}`).join('\n')
 
   // 上游卡住时不永久挂起，超时即 abort（P2-5）
   const ctrl = new AbortController()

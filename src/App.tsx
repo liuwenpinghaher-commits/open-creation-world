@@ -4,23 +4,32 @@ import './App.css'
 import { SketchCanvas } from './sketch/SketchCanvas'
 import { runBehavior } from './fulfill/behaviors'
 import { tryFigureAnimation } from './fulfill/figure'
-import { nextMove, readEngagement } from './guidance/engine'
-import { fulfillDecision } from './guidance/turn'
 import { useVoice } from './voice/useVoice'
+import { isDisplayableInterim, normalizeTranscript } from './voice/sttNormalize'
+import {
+  defaultVoiceConfig,
+  emptyVoiceSession,
+  reduceVoice,
+  type VoiceSessionState,
+} from './voice/session'
+import { startSpeakingMonitor, type SpeakingMonitor } from './voice/speakingMonitor'
+import { startWakeListener, type WakeListener } from './voice/wakeListener'
+import { createTurnQueue, type TurnQueue } from './app/turnQueue'
+import { buildMoveForUtterance, buildPartnerBody, applyPartnerTurn } from './app/runPartnerTurn'
 import { requestPartner } from './cocreate/cocreateClient'
-import { buildRequest } from './cocreate/buildRequest'
-import { applyPartner, emptySession } from './store/sessionStore'
+import { emptySession } from './store/sessionStore'
 import { saveWork, loadWork, listWorks, deleteWork, newWorkId, getCurrentId, setCurrentId, type WorkRecord } from './store/persist'
 import { summarizeSession } from './guidance/summary'
 import { Settings } from './settings/Settings'
 import { ChildPicker } from './settings/ChildPicker'
 import { buildChildContext, moveOptsFrom } from './settings/childContext'
-import { shouldAutoTurn, shouldAutoStory, shouldSendImage, storyMap, filterWorksByChild, sceneNoteOf } from './app/orchestration'
+import { shouldAutoStory, shouldSendImageEx, storyMap, filterWorksByChild } from './app/orchestration'
 import { getActiveChildId, listProfiles, getPrefs, getSafety, getPrivacy, saveStory, saveProfile, getStory, listStories, deleteStory } from './store/family'
 import { defaultPrefs, defaultSafety, type ChildContext, type LearningStory } from './types/settings'
 import type { SessionState } from './types/cocreate'
 
-type Phase = 'idle' | 'recording' | 'thinking'
+/** UI 录制锁（与 VoiceSession.phase 分离：recording 是麦状态） */
+type MicUi = 'idle' | 'recording'
 
 // 仅 dev：暴露 editor 给端到端测试驱动（放在组件外，避免在渲染作用域里改 window）
 function exposeForTest(e: Editor) {
@@ -31,7 +40,8 @@ const nowMs = () => Date.now() // 模块级，避免在组件渲染作用域里�
 export default function App() {
   const editorRef = useRef<Editor | null>(null)
   const [session, setSession] = useState<SessionState>(emptySession())
-  const [phase, setPhase] = useState<Phase>('idle')
+  const [voice, setVoice] = useState<VoiceSessionState>(emptyVoiceSession())
+  const [micUi, setMicUi] = useState<MicUi>('idle')
   const [typed, setTyped] = useState('')
   const [hint, setHint] = useState('')
   const [journal, setJournal] = useState<WorkRecord[] | null>(null) // 非 null 即打开成长册
@@ -47,19 +57,126 @@ export default function App() {
   const [serviceError, setServiceError] = useState(false) // S2：AI 服务连不上（给家长的诊断）
   const [saveError, setSaveError] = useState(false) // P1-3：存盘失败给家长可见信号（否则静默丢画）
   const [storyBusy, setStoryBusy] = useState<string[]>([]) // P2-12：正在生成学习故事的作品（禁用按钮防连点）
-  const { start, stop, speak } = useVoice()
+  const [canvasEmpty, setCanvasEmpty] = useState(true) // 空画布引导：有笔触即消失
+  const { start, stop, speak, stopPlayback, pausePlayback, resumePlayback } = useVoice({
+    onInterim: (t) => {
+      // 仅点麦路径会进这里；过滤 1 字/标点垃圾。不用 micUi 闭包（start 后 setState 前会丢字）
+      if (!isDisplayableInterim(t)) return
+      setHeard(normalizeTranscript(t) || t)
+    },
+  })
 
-  const phaseRef = useRef(phase) // 给 store.listen 等闭包读最新 phase
+  function syncCanvasEmpty(e: Editor | null = editorRef.current) {
+    if (!e) { setCanvasEmpty(true); return }
+    setCanvasEmpty(e.getCurrentPageShapeIds().size === 0)
+  }
+  const voiceCfg = useRef(defaultVoiceConfig()).current
+  const bargeMonRef = useRef<SpeakingMonitor | null>(null)
+  const wakeListenRef = useRef<WakeListener | null>(null)
+  const lastSpokenRef = useRef('')
+  const turnQueueRef = useRef<TurnQueue | null>(null)
+
+  const voiceRef = useRef(voice)
+  useEffect(() => { voiceRef.current = voice }, [voice])
+  const phaseBusy = voice.phase === 'thinking' || micUi === 'recording'
+  // 兼容旧 phase 命名：成长册等用 idle = 非 thinking 且非 recording
+  const phase = voice.phase === 'thinking' ? 'thinking' : micUi === 'recording' ? 'recording' : 'idle'
+  const phaseRef = useRef(phase)
   useEffect(() => { phaseRef.current = phase }, [phase])
 
-  /** 全语音：说出 AI 的话 + 说话指示 + "再听一次"；TTS 没出声则临时显示文字兜底 */
-  async function speakLine(text: string): Promise<void> {
-    if (!text) return
+  function stopBargeMonitor() {
+    bargeMonRef.current?.stop()
+    bargeMonRef.current = null
+  }
+
+  function stopWakeListen() {
+    wakeListenRef.current?.stop()
+    wakeListenRef.current = null
+  }
+
+  /** sleep 期常听「马良」；进入活跃对话时停掉，避免双麦抢资源 */
+  function ensureWakeListen() {
+    if (wakeListenRef.current?.active()) return
+    stopWakeListen()
+    wakeListenRef.current = startWakeListener({
+      onWake: (full) => {
+        stopWakeListen()
+        flashHint('听到你了～')
+        void dispatchVoice({ type: 'final', text: full, nowMs: nowMs() })
+      },
+      onPartialText: (t) => {
+        // 轻量回显：只显示像样的一句，不刷误听碎词
+        if (voiceRef.current.phase === 'sleep' && isDisplayableInterim(t)) {
+          setHeard(normalizeTranscript(t) || t.trim())
+        }
+      },
+      onSttCall: () => {
+        applyVoice(reduceVoice(voiceRef.current, { type: 'api', kind: 'stt' }, voiceCfg).state)
+      },
+      onStatus: (msg) => {
+        if (msg) setHint(msg)
+      },
+      onError: (err) => {
+        const m = typeof err === 'string' ? err : err instanceof Error ? err.message : '语音识别暂时不可用'
+        // 欠费/无权限时说清楚，别「点了没反应」
+        if (/欠费|Arrearage|拒绝|不可用|不支持/i.test(m)) {
+          flashHint(`${m}。请用下方打字，或检查设置·系统里的语音密钥`)
+          setServiceError(true)
+        }
+      },
+    })
+  }
+
+  /** speaking 期挂载 VAD 帧 + soft 后 partial（产品主路径 barge） */
+  function startBargeMonitor() {
+    stopBargeMonitor()
+    bargeMonRef.current = startSpeakingMonitor({
+      onSpeechFrame: (prob, dtMs, t) => {
+        void dispatchVoice({ type: 'speech_frame', prob, dtMs, nowMs: t })
+      },
+      onPartial: (text, t) => {
+        void dispatchVoice({ type: 'partial', text, nowMs: t })
+      },
+      onSttCall: () => {
+        applyVoice(reduceVoice(voiceRef.current, { type: 'api', kind: 'stt' }, voiceCfg).state)
+      },
+    })
+  }
+
+  /**
+   * 全语音：tts_start → 真实播完/打断后才 tts_end。
+   * speak() 会等到 audio ended 或 stopPlayback。
+   * 硬断后 phase 多为 listening（非 thinking），此处仍可 tts_end 收尾到 follow_up，
+   * 但若已有排队的打断句则跳过 follow_up、交给 turnQueue 立刻开下一拍。
+   */
+  async function speakLine(text: string): Promise<{ finished: boolean; stopped: boolean; started: boolean }> {
+    if (!text) return { finished: false, stopped: false, started: false }
     setLastSpoken(text)
+    lastSpokenRef.current = text
     setSpeaking(true)
-    const ok = await speak(text)
+    applyVoice(reduceVoice(voiceRef.current, { type: 'tts_start', text, nowMs: nowMs() }, voiceCfg).state)
+    applyVoice(reduceVoice(voiceRef.current, { type: 'api', kind: 'tts' }, voiceCfg).state)
+    startBargeMonitor()
+    const result = await speak(text)
+    stopBargeMonitor()
     setSpeaking(false)
-    if (!ok) { setFallbackText(text); window.setTimeout(() => setFallbackText(''), 8000); flashHint('听不到？这里有字，也可点 🔊 再试') }
+    // 无论云 TTS 是否成功，都短暂显示文字（设计：不识字也可听；听不到至少能看）
+    setFallbackText(text)
+    window.setTimeout(() => setFallbackText(''), result.started ? 6000 : 12000)
+    if (!result.started && !result.stopped) {
+      flashHint('语音播报走浏览器朗读了～也可点 🔊 再听')
+    }
+    const ph = voiceRef.current.phase
+    const hasPendingBarge = !!turnQueueRef.current?.pending()
+    // 自然播完：speaking → follow_up
+    if (!result.stopped && (ph === 'speaking' || ph === 'barge_candidate')) {
+      await dispatchVoice({ type: 'tts_end', nowMs: nowMs() })
+    } else if (result.stopped && (ph === 'speaking' || ph === 'barge_candidate') && !hasPendingBarge) {
+      // 被停但无打断句：安全回 follow_up，避免卡死
+      await dispatchVoice({ type: 'tts_end', nowMs: nowMs() })
+    }
+    // 硬断 + 已有 pending run_turn：保持 listening，由 turnQueue 立刻执行打断句
+    return result
   }
 
   // 个性化：活跃孩子的 childContext 与引导权重（refs 供 runTurn 读，避免闭包过期）
@@ -108,12 +225,94 @@ export default function App() {
   const workIdRef = useRef<string>('') // 当前正在画的作品 id
   const suppressSaveRef = useRef(false) // 兑现动画期间挂起自动保存（避免动画帧刷屏/误存）
   const saveTimerRef = useRef(0) // 防抖存盘 timer（提为 ref 便于切换作品时清除，P2-15）
-  const drawTimerRef = useRef(0) // 自动一拍 timer（同上）
-  const runningRef = useRef(false) // 同步起拍锁：防 drawTimer×手动起拍并发两拍（P2-14）
+  const followTimerRef = useRef(0) // follow_up 静默超时
   const saveErrRef = useRef(false) // saveError 的镜像，避免每秒存盘都重渲染
   const storyBusyRef = useRef<Set<string>>(new Set()) // 生成学习故事 in-flight（同步去重，P2-12）
 
-  function clearTimers() { window.clearTimeout(saveTimerRef.current); window.clearTimeout(drawTimerRef.current) }
+  function clearTimers() {
+    window.clearTimeout(saveTimerRef.current)
+    window.clearTimeout(followTimerRef.current)
+  }
+
+  function applyVoice(next: VoiceSessionState) {
+    const prev = voiceRef.current.phase
+    voiceRef.current = next
+    setVoice(next)
+    // sleep ↔ 活跃：启停常听唤醒
+    if (next.phase === 'sleep' && prev !== 'sleep') {
+      // 下一帧再开，避免与 barge mon 抢麦
+      window.setTimeout(() => {
+        if (voiceRef.current.phase === 'sleep') ensureWakeListen()
+      }, 200)
+    } else if (next.phase !== 'sleep' && prev === 'sleep') {
+      stopWakeListen()
+    }
+  }
+
+  /** 驱动 FSM；执行 effects（run_turn / flush_save / 真实 pause·stop TTS 等） */
+  async function dispatchVoice(ev: Parameters<typeof reduceVoice>[1]): Promise<void> {
+    const out = reduceVoice(voiceRef.current, ev, voiceCfg)
+    applyVoice(out.state)
+    for (const ef of out.effects) {
+      if (ef.type === 'flush_save') saveNow()
+      if (ef.type === 'stop_tts') {
+        stopBargeMonitor()
+        stopPlayback() // 真实停 HTMLAudioElement → speak() resolve stopped
+        setSpeaking(false)
+      }
+      if (ef.type === 'soft_pause_tts') {
+        pausePlayback()
+        setSpeaking(false)
+        // 候选窗内拉一次 STT partial，供 G2
+        bargeMonRef.current?.requestPartial()
+      }
+      if (ef.type === 'resume_tts') {
+        const ok = await resumePlayback()
+        if (ok) setSpeaking(true)
+        else if (lastSpokenRef.current) {
+          // 无法 resume 时重播本句（不重新 partner）
+          void speak(lastSpokenRef.current).then((r) => {
+            setSpeaking(false)
+            if (voiceRef.current.phase === 'speaking' || voiceRef.current.phase === 'barge_candidate') {
+              void dispatchVoice({ type: 'tts_end', nowMs: nowMs() })
+            }
+            void r
+          })
+        }
+      }
+      if (ef.type === 'enter_follow_up') {
+        // 若打断句已入队，不要进入 follow_up 计时抢状态
+        if (turnQueueRef.current?.pending()) continue
+        window.clearTimeout(followTimerRef.current)
+        const until = voiceRef.current.followUpUntilMs
+        const delay = until != null ? Math.max(0, until - nowMs()) : voiceCfg.T_follow_up_ms
+        followTimerRef.current = window.setTimeout(() => {
+          void dispatchVoice({ type: 'tick', nowMs: nowMs() })
+        }, delay)
+      }
+      if (ef.type === 'run_turn') {
+        // 永不丢弃：硬断发生在 await speakLine 期间时入队，外层结束后立刻执行
+        if (!turnQueueRef.current) {
+          turnQueueRef.current = createTurnQueue(async (utt) => {
+            try {
+              await runTurn(utt)
+            } catch (err) {
+              console.error('turn failed:', err)
+              // 失败时勿锁死 thinking
+              if (voiceRef.current.phase === 'thinking') {
+                applyVoice({
+                  ...voiceRef.current,
+                  phase: 'follow_up',
+                  followUpUntilMs: nowMs() + voiceCfg.T_follow_up_ms,
+                })
+              }
+            }
+          })
+        }
+        await turnQueueRef.current.enqueue(ef.utterance)
+      }
+    }
+  }
   function markSaveError(v: boolean) { if (saveErrRef.current !== v) { saveErrRef.current = v; setSaveError(v) } }
   function markStoryBusy(id: string, busy: boolean) {
     if (busy) storyBusyRef.current.add(id); else storyBusyRef.current.delete(id)
@@ -150,6 +349,7 @@ export default function App() {
       dirtyRef.current = false
       suppressSaveRef.current = false
       setHeard('')
+      syncCanvasEmpty(e)
     }
   }
 
@@ -161,16 +361,6 @@ export default function App() {
     await makeStory({ id: workId, session: sess, createdAt: 0, updatedAt: 0, childId }, profile, false)
   }
 
-  /** B1：孩子画完停顿 → 自动发起一拍（仅凭画就回应，不必开口） */
-  function maybeAutoTurn() {
-    const e = editorRef.current
-    if (!e || runningRef.current) return // P2-14：已有一拍在跑就不并发
-    if (!shouldAutoTurn(phaseRef.current, dirtyRef.current, e.getCurrentPageShapeIds().size)) return
-    runningRef.current = true
-    setPhase('thinking')
-    runTurn('').catch((err) => console.warn('auto turn failed:', err)).finally(() => { runningRef.current = false; setPhase('idle') })
-  }
-
   async function handleEditorMount(e: Editor) {
     editorRef.current = e
     await loadFamily() // 先知道活跃孩子是谁
@@ -180,16 +370,32 @@ export default function App() {
     }
     e.setCurrentTool('draw')
 
+    syncCanvasEmpty(e)
     e.store.listen(
       () => {
         if (suppressSaveRef.current) return // 兑现动画帧/程序性载图不算孩子改画，跳过
         dirtyRef.current = true
+        syncCanvasEmpty(e) // 一落笔就收起 empty-hint，别一直挡画面
+        // 只画不说：不自动 partner（P2 画画≠对话）；仅防抖存盘
         window.clearTimeout(saveTimerRef.current); saveTimerRef.current = window.setTimeout(() => saveNow(), 1000)
-        window.clearTimeout(drawTimerRef.current); drawTimerRef.current = window.setTimeout(() => maybeAutoTurn(), 2600) // B1
       },
       { scope: 'document', source: 'user' }
     )
-    exposeForTest(e) // 末尾再暴露：确保 E2E 在画布完全就绪后才操作（避免与 openWorkForChild 清画竞态）
+    // 页隐藏强制落盘
+    const onHide = () => {
+      if (document.visibilityState === 'hidden') {
+        saveNow()
+        void dispatchVoice({ type: 'force_sleep', nowMs: nowMs() })
+      }
+    }
+    document.addEventListener('visibilitychange', onHide)
+    exposeForTest(e)
+    // 启动常听唤醒（家长需先授过麦；失败则仍可用点麦）
+    ensureWakeListen()
+    if (import.meta.env.DEV) {
+      ;(window as unknown as { __voiceDispatch?: typeof dispatchVoice }).__voiceDispatch = dispatchVoice
+      ;(window as unknown as { __voiceState?: () => VoiceSessionState }).__voiceState = () => voiceRef.current
+    }
   }
 
   /** 开新的一张：先把当前这张自动成文，再另存新作品 */
@@ -209,6 +415,7 @@ export default function App() {
       const ids = [...editor.getCurrentPageShapeIds()]
       if (ids.length) editor.deleteShapes(ids)
     }
+    setCanvasEmpty(true)
   }
 
   async function refreshJournal() {
@@ -235,6 +442,7 @@ export default function App() {
     dirtyRef.current = false
     suppressSaveRef.current = false
     setJournal(null)
+    syncCanvasEmpty(editor)
   }
 
   async function removeWork(id: string) {
@@ -252,6 +460,7 @@ export default function App() {
       dirtyRef.current = false
       const editor = editorRef.current
       if (editor) { const ids = [...editor.getCurrentPageShapeIds()]; if (ids.length) editor.deleteShapes(ids) }
+      setCanvasEmpty(true)
     }
     await refreshJournal()
   }
@@ -314,47 +523,64 @@ export default function App() {
     return url
   }
 
-  /** 一拍：感知(变了才发图) → 引导引擎选 move → 伙伴出激发 → 孩子明确要时兑现 → 说出来。不管理 phase。 */
+  /** 一拍：感知 → 本地 move → partner → 播报拼装 → fulfill 糖 → follow_up */
   async function runTurn(utterance: string) {
     const editor = editorRef.current
     if (!editor) return
-    // P2-9：快照本拍所属的作品与孩子——收尾只写回它，即使拍进行中被切娃/切作品也不会张冠李戴
     const wid = workIdRef.current
     const wcid = activeChildRef.current
+    const t = nowMs()
 
-    setHeard(utterance) // P4：回显"我听到你说…"，听错可纠正
-    const drew = dirtyRef.current // 这一拍孩子是否动过笔
+    void dispatchVoice({ type: 'think_start', nowMs: t })
+    setHeard(utterance)
+    stopWakeListen() // 活跃一拍期间关掉常听，避免与 partner/TTS 抢麦
+    const drew = dirtyRef.current
     const shapeCount = editor.getCurrentPageShapeIds().size
-    // 隐私模式：不上传画面，仅凭语音引导
-    const imageDataUrl = shouldSendImage(drew, privacyRef.current) ? await exportCanvasPng() : undefined
+    const forceFirst = !sessionRef.current.dialog.some((d) => d.role === 'child')
+    const imageDataUrl = shouldSendImageEx({
+      drew,
+      privacy: privacyRef.current,
+      voiceActive: true,
+      forceFirstUtterance: forceFirst || !!utterance,
+    })
+      ? await exportCanvasPng()
+      : undefined
     if (imageDataUrl) dirtyRef.current = false
 
-    // 节奏自适应：结合孩子这句 + 是否在画，判断卡住/投入，决定降难度+加支架
-    const childUtts = sessionRef.current.dialog.filter((d) => d.role === 'child').map((d) => d.text)
-    const move = nextMove(sessionRef.current.guidance, readEngagement([...childUtts, utterance], drew), moveOptsRef.current)
+    const move = buildMoveForUtterance(sessionRef.current, utterance, drew, shapeCount, moveOptsRef.current)
     let res
     try {
-      res = await requestPartner(buildRequest({ imageDataUrl, childUtterance: utterance, history: sessionRef.current.dialog, move, hasDrawing: shapeCount > 0, childContext: childCtxRef.current, sceneNote: sceneNoteOf(sessionRef.current) }))
-      setServiceError(false) // S2：连上了就清除告警
+      applyVoice(reduceVoice(voiceRef.current, { type: 'api', kind: 'partner' }, voiceCfg).state)
+      res = await requestPartner(buildPartnerBody({
+        session: sessionRef.current,
+        utterance,
+        move,
+        imageDataUrl,
+        shapeCount,
+        childContext: childCtxRef.current,
+      }))
+      setServiceError(false)
     } catch (e) {
-      setServiceError(true) // S2：AI 服务连不上 → 给家长一个清楚的入口
+      setServiceError(true)
+      void dispatchVoice({ type: 'force_sleep', nowMs: nowMs() })
       throw e
     }
 
-    // 防"假兑现"：要求兑现但画布空 → 不动画、改说引导先画。说什么就存什么（说=气泡=成长册）
-    const decision = fulfillDecision(res, shapeCount)
-    const merged = applyPartner(sessionRef.current, res, utterance, decision.line)
+    const applied = applyPartnerTurn(sessionRef.current, res, utterance, shapeCount)
+    const decision = { behavior: applied.behavior, line: applied.line }
+    const merged = applied.session
     setSession(merged)
 
+    // think_done 仅更新文案提示；真正 speaking→follow_up 在 speakLine 等播完/打断后 tts_end
+    void dispatchVoice({ type: 'think_done', nowMs: nowMs(), ttsText: decision.line })
+
     if (decision.behavior) {
-      // P1-4：隐私模式不导出/上传画面（豪华兑现会把画 POST 给外部 AD 服务）——降级到纯本地木偶动画
       const png = privacyRef.current ? null : await exportCanvasPng()
       const video = png ? await tryFigureAnimation(png) : null
       if (video) {
         setFigureVideo(video)
         await speakLine(decision.line)
       } else {
-        // P1：优先只动孩子选中的对象；没选则整张画。P5：兑现期间挂起自动保存。
         const sel = [...editor.getSelectedShapeIds()].map(String)
         const ids = sel.length ? sel : [...editor.getCurrentPageShapeIds()].map(String)
         suppressSaveRef.current = true
@@ -363,56 +589,95 @@ export default function App() {
           speakLine(decision.line),
         ])
         suppressSaveRef.current = false
-        dirtyRef.current = false // 兑现只是表演（已归位），不算孩子改了画，下一拍不必重发图
+        dirtyRef.current = false
       }
     } else {
       await speakLine(decision.line)
     }
-    saveNow(merged, wid, wcid) // 只写回本拍所属作品/孩子（P2-9）
+    // speakLine 内部已在播完/stop 后 dispatch tts_end
+    saveNow(merged, wid, wcid)
   }
 
   async function handleMic() {
-    if (phase === 'thinking') return
-    if (phase === 'recording') {
-      if (runningRef.current) return // P2-14：起拍同步锁
-      runningRef.current = true
-      clearTimers() // 手动起拍，清掉可能待触发的自动一拍（P2-15）
-      setPhase('thinking')
+    if (voiceRef.current.phase === 'thinking') return
+    if (micUi === 'recording') {
+      if (turnQueueRef.current?.isRunning()) return
+      clearTimers()
+      flashHint('正在整理你说的话…')
       try {
+        applyVoice(reduceVoice(voiceRef.current, { type: 'api', kind: 'stt' }, voiceCfg).state)
         const text = await stop()
-        if (text && text.trim()) await runTurn(text.trim())
-        else flashHint('没听清，再说一次，或在右边打字告诉我～')
+        setMicUi('idle')
+        // pickBestStt 已纠错；再规整一次兜底
+        const raw = normalizeTranscript(text ?? '') || (text ?? '').trim()
+        // 过短/乱码：别硬加「马良」变成「马良一」
+        if (raw.length < 2) {
+          flashHint('没听清完整一句。请靠近麦克风、说完整一句再说完点黄钮；或直接打字（最稳）')
+          if (voiceRef.current.phase === 'sleep') ensureWakeListen()
+          return
+        }
+        setHeard(raw)
+        const withWake =
+          voiceRef.current.phase === 'sleep' && !raw.includes('马良') && raw.length >= 2
+            ? `马良${raw}`
+            : raw
+        flashHint('我在想…')
+        await dispatchVoice({ type: 'final', text: withWake, nowMs: nowMs() })
       } catch (err) {
         console.error('voice turn failed:', err)
-        setServiceError(true) // P2-10：STT/一拍服务故障也给家长诊断入口（别只提示"没听清"）
-        flashHint('语音服务连不上，先用打字，或点上方 ⚠️ 去设置检查～')
-      } finally { runningRef.current = false; setPhase('idle') }
+        setServiceError(true)
+        setMicUi('idle')
+        flashHint('识别失败。请用打字最稳；并检查阿里云是否欠费')
+        if (voiceRef.current.phase === 'sleep') ensureWakeListen()
+      }
     } else {
-      try { await start(); setPhase('recording') }
-      catch (err) { console.error('mic start failed:', err); flashHint('打不开麦克风，检查一下浏览器麦克风权限～'); setPhase('idle') }
+      try {
+        stopWakeListen() // 点麦时关掉常听，避免两个识别器抢麦、串音
+        setMicUi('recording')
+        setHeard('')
+        flashHint('正在听…说完整一句，说完再点黄钮（走云识别，更准）')
+        await start()
+      } catch (err) {
+        console.error('mic start failed:', err)
+        flashHint('打不开麦克风，请点地址栏允许麦克风，或用打字')
+        setMicUi('idle')
+      }
     }
   }
 
   function submitTyped() {
-    if (phase === 'thinking' || !typed.trim() || runningRef.current) return // P2-14：起拍同步锁
+    if (voiceRef.current.phase === 'thinking' || !typed.trim() || turnQueueRef.current?.isRunning()) return
     const t = typed.trim()
     setTyped('')
-    runningRef.current = true
-    clearTimers() // 手动起拍，清掉可能待触发的自动一拍（P2-15）
-    setPhase('thinking')
-    runTurn(t)
-      .catch((err) => { console.error('typed turn failed:', err); flashHint('刚才没成功，再试一次～') })
-      .finally(() => { runningRef.current = false; setPhase('idle') })
+    clearTimers()
+    // 打字为家长/调试兜底：sleep 时自动加唤醒前缀
+    const withWake = voiceRef.current.phase === 'sleep' && !t.includes('马良') ? `马良${t}` : t
+    void dispatchVoice({ type: 'final', text: withWake, nowMs: nowMs() })
   }
 
   function setTool(name: 'draw' | 'eraser' | 'select') { editorRef.current?.setCurrentTool(name) }
   function undo() { editorRef.current?.undo() }
 
-  const micLabel = phase === 'thinking' ? '✏️ 我在听…' : phase === 'recording' ? '🔴 说完了，点我' : '🎙️ 点我说话'
+  const micLabel =
+    voice.phase === 'thinking' ? '✏️ 我在想…'
+      : micUi === 'recording' ? '🔴 说完了，点我结束'
+        : voice.phase === 'sleep' ? '🎙️ 点我说（或直接叫马良）'
+          : voice.phase === 'follow_up' ? '🎙️ 继续说'
+            : '🎙️ 点我说话'
+
+  const phaseDot =
+    voice.phase === 'sleep' ? '休眠'
+      : voice.phase === 'listening' || voice.phase === 'arming' || micUi === 'recording' ? '在听'
+        : voice.phase === 'thinking' ? '在想'
+          : voice.phase === 'speaking' || voice.phase === 'barge_candidate' ? '在说'
+            : voice.phase === 'follow_up' ? '接着聊'
+              : ''
 
   return (
     <div className="shenbi">
       <SketchCanvas onMount={handleEditorMount} />
+
+      <div className="voice-phase-dot" data-phase={voice.phase} title={voice.phase}>{phaseDot}</div>
 
       <ChildPicker onChange={() => void loadFamily()} />
 
@@ -421,7 +686,7 @@ export default function App() {
         <button type="button" title="橡皮" onClick={() => setTool('eraser')}>🧽</button>
         <button type="button" title="选这个（让它单独动）" onClick={() => setTool('select')}>👆</button>
         <button type="button" title="撤销" onClick={undo}>↩️</button>
-        <button type="button" title="新的一张" onClick={handleNewStory} disabled={phase !== 'idle'}>🆕</button>
+        <button type="button" title="新的一张" onClick={handleNewStory} disabled={phaseBusy}>🆕</button>
         <button type="button" title="成长册（给爸爸妈妈看）" onClick={openJournal}>📖</button>
         <button type="button" title="设置（家长）" onClick={() => setShowSettings(true)}>⚙️</button>
       </div>
@@ -521,15 +786,15 @@ export default function App() {
         </div>
       ) : null}
 
-      {session.dialog.length === 0 && phase === 'idle' ? (
-        <div className="empty-hint">在纸上画点什么，或者点下面的按钮和我说说话吧～</div>
+      {/* 仅「空白新画 + 还没开聊」时提示；一画就消失，避免一直挡画面 */}
+      {canvasEmpty && session.dialog.length === 0 && voice.phase === 'sleep' && micUi === 'idle' ? (
+        <div className="empty-hint">在纸上画点什么；想聊时说「马良…」或点下面麦克风～</div>
       ) : null}
 
       {fallbackText ? <div className="partner-bubble">{fallbackText}</div> : null}
 
-      {/* 全语音：不显示 AI 文字，只用动效反馈 */}
-      {phase === 'thinking' ? <div className="thinking-overlay">✨ 我在想…</div> : null}
-      {speaking ? <div className="speaking-overlay">🔊 说话中…</div> : null}
+      {voice.phase === 'thinking' ? <div className="thinking-overlay">✨ 我在想…</div> : null}
+      {speaking || voice.phase === 'speaking' ? <div className="speaking-overlay">🔊 说话中…</div> : null}
 
       <div className="talk-bar">
         {heard ? <span className="heard">我听到你说：{heard}</span> : null}
@@ -537,15 +802,15 @@ export default function App() {
         <button
           type="button" className="replay-voice" title="再听一次"
           onClick={() => void speakLine(lastSpoken)}
-          disabled={phase === 'thinking' || speaking || !lastSpoken}
+          disabled={voice.phase === 'thinking' || speaking || !lastSpoken}
         >🔊</button>
-        <button className="talk-btn" type="button" onClick={handleMic} disabled={phase === 'thinking'}>
+        <button className="talk-btn" type="button" onClick={handleMic} disabled={voice.phase === 'thinking'}>
           {micLabel}
         </button>
         <input
           value={typed}
-          placeholder="（或在这里打字告诉我）"
-          disabled={phase === 'thinking'}
+          placeholder="（家长/调试：打字，可写「马良…」）"
+          disabled={voice.phase === 'thinking'}
           onChange={(e) => setTyped(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter') submitTyped() }}
         />

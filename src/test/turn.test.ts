@@ -6,10 +6,14 @@ function res(extra: Partial<PartnerResponse>): PartnerResponse {
   return { noticed: '', dimension: 'imagination', crowd: 'open', provoke: '它想去哪儿？', fulfill: null, ...extra }
 }
 
-describe('partnerLine', () => {
-  it('拼接 evaluate+expand+provoke', () => {
+describe('partnerLine（§9.4 播报拼装）', () => {
+  it('主句 provoke；短 evaluate 可作前缀；不播 expand', () => {
     expect(partnerLine(res({ peer: { evaluate: '真棒', expand: '飞过大山' } })))
-      .toBe('真棒 飞过大山 它想去哪儿？')
+      .toBe('真棒 它想去哪儿？')
+  })
+  it('过长 evaluate 不播', () => {
+    expect(partnerLine(res({ peer: { evaluate: '这是一段超过二十个字的评价话术不能当TTS前缀' } })))
+      .toBe('它想去哪儿？')
   })
 })
 

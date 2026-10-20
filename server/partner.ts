@@ -116,6 +116,60 @@ function tryParse(text: string): Record<string, unknown> | null {
   catch { return null }
 }
 
+function buildDemoPartnerJson(input: {
+  childUtterance: string
+  move: { dimension: GuidanceDimension; crowd: CrowdType }
+  hasDrawing?: boolean
+}): string {
+  const u = (input.childUtterance || '').trim()
+  const dimProvokes: Record<GuidanceDimension, string> = {
+    observe_express: u
+      ? `哇，我看到你画的${u.slice(0, 12)}啦！它身上最特别的颜色或形状在哪里呀？`
+      : '哇，画布上的线条真有趣！快跟我说说，你画的这个小家伙叫什么名字呀？',
+    narrative_logic: u
+      ? `原来是这样呀！那在「${u.slice(0, 12)}」之后，接下来又发生了什么故事呢？`
+      : '我看到你画了好几个部分，它们是怎么凑到一块儿的呀？',
+    imagination: u
+      ? `太酷了！如果这个「${u.slice(0, 10)}」突然拥有了魔法，它会变成什么样呢？`
+      : '哇，如果这幅画里的小东西突然会说话，它第一句会跟你说什么呀？',
+    problem_solving: u
+      ? `呀，前面突然出现了一条又宽又深的大河，你画的小主角怎么才能过去呢？`
+      : '糟糕，天快黑了，画里的小家伙怎样才能找到回家的路呢？你有什么好办法？',
+  }
+
+  let fulfill: { behavior: string; trigger: string } | null = null
+  if (input.hasDrawing !== false && u) {
+    const behaviorMap: Array<[RegExp, string]> = [
+      [/飞/, 'fly'],
+      [/变大|长高|长大/, 'grow'],
+      [/转圈|旋转|转/, 'spin'],
+      [/跳|蹦/, 'hop'],
+      [/走|跑/, 'walk'],
+      [/弹/, 'bounce'],
+      [/抖|摇/, 'wobble'],
+    ]
+    for (const [re, b] of behaviorMap) {
+      if (re.test(u)) {
+        fulfill = { behavior: b, trigger: u }
+        break
+      }
+    }
+  }
+
+  return JSON.stringify({
+    noticed: u ? `孩子描述了「${u.slice(0, 20)}」，画面线条生动` : '画布上有充满童趣的涂鸦线条',
+    peer: u
+      ? {
+          evaluate: '你观察得真仔细，想法太棒啦！',
+          expand: `${u}听起来就像一个充满奇遇的故事开头。`,
+        }
+      : undefined,
+    provoke: dimProvokes[input.move.dimension] || '哇，这幅画真好玩，接下来会发生什么呢？',
+    fulfill,
+    childSignal: u || '画布创作中',
+  })
+}
+
 export async function callPartner(input: {
   imageDataUrl?: string
   childUtterance: string
@@ -125,6 +179,12 @@ export async function callPartner(input: {
   childContext?: ChildContext
   sceneNote?: string
 }): Promise<PartnerResponse> {
+  const { model, fulfill: fulfillPolicy } = getConfig()
+  if (!model.apiKey) {
+    const demoParsed = tryParse(buildDemoPartnerJson(input)) ?? {}
+    return gateFulfill(sanitizePartner(demoParsed, input.move), fulfillPolicy)
+  }
+
   const canvasNote = input.hasDrawing === false
     ? '\n【画布上现在还没有任何东西。不要假设有可动的角色，更不要设置 fulfill 说"它动起来了"——先引导孩子画点东西。】'
     : ''

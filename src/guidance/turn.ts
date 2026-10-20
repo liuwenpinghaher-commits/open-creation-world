@@ -1,8 +1,19 @@
 import type { Behavior, PartnerResponse } from '../types/cocreate'
 
-/** 把伙伴的肯定+扩展+激发拼成要说出来的一句话 */
+/**
+ * 播报拼装（设计 §9.4）：
+ * 主句 = provoke；可选短 evaluate（≤20 字）作前缀；不播 noticed / 长 expand。
+ */
 export function partnerLine(res: PartnerResponse): string {
-  return [res.peer?.evaluate, res.peer?.expand, res.provoke].filter(Boolean).join(' ')
+  const provoke = (res.provoke ?? '').trim()
+  const evaluate = (res.peer?.evaluate ?? '').trim()
+  const prefix = evaluate && evaluate.length <= 20 ? evaluate : ''
+  return [prefix, provoke].filter(Boolean).join(' ')
+}
+
+/** 实际 TTS 文案（与 dialog 写入一致） */
+export function spokenTtsText(res: PartnerResponse): string {
+  return partnerLine(res)
 }
 
 /**

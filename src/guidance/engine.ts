@@ -1,10 +1,11 @@
 import type { CrowdType, GuidanceDimension, GuidanceMove } from '../types/cocreate'
+import { suggestDimensionFromHints, type ContentHints } from './contentHints'
 
 // 引导引擎：本地、确定性地决定本拍"引导哪个能力维度 + 用哪种 CROWD 提问"。
-// 维度均衡轮换、不连续重复；CROWD 随该维度的访问次数轮换，避免每次同一句式。
+// 优先级（高→低）：stuck → 连续≥2同维强制换维 → 家长权重 → contentHints → 默认轮换
 // LLM 只负责把这个 move 写成温暖的口语激发（措辞），不决定策略。
 
-const DIMS: GuidanceDimension[] = ['observe_express', 'narrative_logic', 'imagination', 'problem_solving']
+export const DIMS: GuidanceDimension[] = ['observe_express', 'narrative_logic', 'imagination', 'problem_solving']
 
 // 每个维度偏好的 CROWD 提问类型（来自对话式共读，目标←手段映射）
 const CROWD_BY_DIM: Record<GuidanceDimension, CrowdType[]> = {
@@ -50,6 +51,21 @@ export function readEngagement(childUtterances: string[], drewThisTurn = false):
 export type MoveOpts = {
   weights?: Partial<Record<GuidanceDimension, number>> // 家长偏好：>1 多练该维度
   lockSupport?: 'auto' | 'high' | 'normal' // 支架：自适应或锁定
+  hints?: ContentHints
+  /** 连续同维达到此次数则强制换维（默认 2） */
+  forceSwitchAfter?: number
+}
+
+/** 末尾连续同一维度的次数 */
+export function trailingSameDimCount(history: GuidanceDimension[]): number {
+  if (history.length === 0) return 0
+  const last = history[history.length - 1]
+  let n = 0
+  for (let i = history.length - 1; i >= 0; i--) {
+    if (history[i] === last) n++
+    else break
+  }
+  return n
 }
 
 /** 选下一个目标维度：按权重的"有效次数(次数/权重)"最少 → 不等于上一拍 → 固定序。无权重时退化为均衡轮换。 */
@@ -62,17 +78,53 @@ export function nextDimension(history: GuidanceDimension[], weights?: MoveOpts['
   return (avoidingLast.length ? avoidingLast : candidates)[0]
 }
 
-/** 完整一步：维度 + CROWD 提问 + 支架强度。卡住→降到最具体维度+高支架；可加权偏好与锁定支架。 */
+function crowdFor(dimension: GuidanceDimension, history: GuidanceDimension[]): CrowdType {
+  const crowds = CROWD_BY_DIM[dimension]
+  return crowds[countOf(history, dimension) % crowds.length]
+}
+
+/** 家长是否显式加权（任一维 weight≠1）——有则权重层压过 contentHints */
+export function hasParentWeightSkew(weights?: MoveOpts['weights']): boolean {
+  if (!weights) return false
+  return Object.values(weights).some((w) => w !== undefined && w !== 1)
+}
+
+/**
+ * 完整一步：维度 + CROWD + 支架。
+ * 优先级（AC3）：stuck → 强制换维 → 家长权重 → contentHints → 默认轮换
+ */
 export function nextMove(history: GuidanceDimension[], engagement: Engagement = 'normal', opts: MoveOpts = {}): GuidanceMove {
   const lock = opts.lockSupport ?? 'auto'
   const support = lock === 'auto' ? (engagement === 'stuck' ? 'high' : 'normal') : lock
+  const forceAfter = opts.forceSwitchAfter ?? 2
+
+  // 1) stuck
   if (engagement === 'stuck') {
     const last = history[history.length - 1]
     const dimension = EASE_ORDER.find((d) => d !== last) ?? EASE_ORDER[0]
     return { dimension, crowd: 'wh', support }
   }
+
+  const last = history[history.length - 1]
+  // 2) 连续 ≥ forceAfter 同维 → 强制换（仍走加权 nextDimension）
+  if (last && trailingSameDimCount(history) >= forceAfter) {
+    const dimension = nextDimension(history, opts.weights)
+    return { dimension, crowd: crowdFor(dimension, history), support }
+  }
+
+  // 3) 家长权重：有偏斜时直接按权重轮换，不让 hints 抢先
+  if (hasParentWeightSkew(opts.weights)) {
+    const dimension = nextDimension(history, opts.weights)
+    return { dimension, crowd: crowdFor(dimension, history), support }
+  }
+
+  // 4) contentHints（无家长偏斜时）
+  const hinted = opts.hints ? suggestDimensionFromHints(opts.hints) : null
+  if (hinted && hinted !== last) {
+    return { dimension: hinted, crowd: crowdFor(hinted, history), support }
+  }
+
+  // 5) 默认轮换
   const dimension = nextDimension(history, opts.weights)
-  const crowds = CROWD_BY_DIM[dimension]
-  const crowd = crowds[countOf(history, dimension) % crowds.length]
-  return { dimension, crowd, support }
+  return { dimension, crowd: crowdFor(dimension, history), support }
 }

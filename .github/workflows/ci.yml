@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test-and-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install root dependencies (Canvas Partner Edition)
+        run: npm install
+
+      - name: Run root unit tests & build
+        run: |
+          npx vitest run src/test
+          npm run build
+
+      - name: Install v4 dependencies (Growth & Evidence Edition)
+        working-directory: apps/shenbi-maliang-v4
+        run: npm install
+
+      - name: Run v4 unit tests & build
+        working-directory: apps/shenbi-maliang-v4
+        run: |
+          npm test
+          npm run build
+
+      - name: Sensitive pattern scan
+        run: |
+          ! grep -rnI --exclude-dir=.git --exclude-dir=node_modules --exclude-dir=.next --exclude-dir=dist -E 'sk-[A-Za-z0-9]{20,}|82[.]157[.]130[.]140|10[.]144[.]144[.]|qing[.]blue|/[h]ome/chris|/[h]ome/ubuntu|/[U]sers/miaoma|s[c]ribe3-demo' .

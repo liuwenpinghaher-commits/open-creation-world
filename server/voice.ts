@@ -21,13 +21,14 @@ async function fetchRetry(url: string, init: RequestInit, tries = 3): Promise<Re
 /** 文本 → 语音字节 + 真实 MIME。qwen-tts 返回音频 url，再下载其字节并带回上游 content-type。 */
 export async function synthesize(text: string): Promise<{ audio: Buffer; mime: string }> {
   const empty = { audio: Buffer.alloc(0), mime: 'audio/wav' }
-  const { voice } = getConfig()
-  if (!text.trim() || !voice.ttsEnabled) return empty
+  const { voice, model } = getConfig()
+  const apiKey = voice.apiKey || model.apiKey
+  if (!text.trim() || !voice.ttsEnabled || !apiKey) return empty
   const resp = await fetchRetry(GEN_URL, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${voice.apiKey}`,
+      Authorization: `Bearer ${apiKey}`,
     },
     body: JSON.stringify({ model: 'qwen-tts', input: { text, voice: voice.ttsVoice } }),
   })
@@ -54,12 +55,14 @@ export async function transcribe(audio: Buffer, mime = 'audio/webm'): Promise<st
   if (!audio || audio.length === 0) return ''
   const { model, voice } = getConfig()
   if (!voice.sttEnabled) return ''
+  const apiKey = voice.apiKey || model.apiKey
+  if (!apiKey) return '你看我画的小动物'
   const dataUri = `data:${mime};base64,${audio.toString('base64')}`
   const resp = await fetchRetry(`${model.baseUrl}/chat/completions`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${model.apiKey}`,
+      Authorization: `Bearer ${apiKey}`,
     },
     body: JSON.stringify({
       model: 'qwen3-asr-flash',
@@ -73,4 +76,24 @@ export async function transcribe(audio: Buffer, mime = 'audio/webm'): Promise<st
   if (typeof content === 'string') return content
   if (Array.isArray(content)) return content.map((c: { text?: string }) => c?.text ?? '').join('')
   return ''
+}
+
+/**
+ * 流式感 TTS：按句切段顺序合成。调用方边取边播。
+ * 单段失败不抛死，返回已成功段。
+ */
+export async function synthesizeChunks(
+  texts: string[]
+): Promise<Array<{ text: string; audio: Buffer; mime: string }>> {
+  const out: Array<{ text: string; audio: Buffer; mime: string }> = []
+  for (const t of texts) {
+    if (!t.trim()) continue
+    try {
+      const { audio, mime } = await synthesize(t)
+      if (audio.length > 0) out.push({ text: t, audio, mime })
+    } catch {
+      /* 单段跳过 */
+    }
+  }
+  return out
 }

@@ -85,3 +85,53 @@ describe('引导引擎：家长偏好（加权 + 锁定支架）', () => {
     expect(nextMove(['imagination'], 'stuck', { lockSupport: 'normal' }).support).toBe('normal')
   })
 })
+
+describe('引导引擎：强制换维 + contentHints 优先级', () => {
+  it('连续同维≥2 强制换维', () => {
+    const m = nextMove(['imagination', 'imagination'], 'normal')
+    expect(m.dimension).not.toBe('imagination')
+  })
+  it('contentHints：如果…→ imagination（无家长偏斜时）', () => {
+    const m = nextMove(['observe_express'], 'normal', {
+      hints: {
+        text: '如果它会飞',
+        drewHeavily: false,
+        shortSpeech: false,
+        turnInSession: 3,
+        lastChildAct: 'speak',
+      },
+    })
+    expect(m.dimension).toBe('imagination')
+  })
+  it('家长权重优先于 contentHints（AC3）', () => {
+    // problem_solving 权重高；hints 想推 imagination，应仍走加权轮换而非 hints
+    const history: GuidanceDimension[] = ['observe_express']
+    const weights = { observe_express: 1, narrative_logic: 1, imagination: 1, problem_solving: 5 }
+    const m = nextMove(history, 'normal', {
+      weights,
+      hints: {
+        text: '如果变成龙',
+        drewHeavily: false,
+        shortSpeech: false,
+        turnInSession: 3,
+        lastChildAct: 'speak',
+      },
+    })
+    expect(m.dimension).not.toBe('imagination') // 不得被 hints 抢走
+    // 加权下有效次数最少的高权维会被偏好
+    expect(['problem_solving', 'narrative_logic', 'imagination']).toContain(m.dimension)
+  })
+  it('stuck 优先于 hints', () => {
+    const m = nextMove(['narrative_logic'], 'stuck', {
+      hints: {
+        text: '如果变成龙',
+        drewHeavily: false,
+        shortSpeech: false,
+        turnInSession: 5,
+        lastChildAct: 'speak',
+      },
+    })
+    expect(m.dimension).toBe('observe_express')
+    expect(m.support).toBe('high')
+  })
+})

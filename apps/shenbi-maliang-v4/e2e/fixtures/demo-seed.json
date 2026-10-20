@@ -1,0 +1,246 @@
+{
+	"schema": "shenbi-demo-seed-v1",
+	"label": "演示家庭 · 乐乐",
+	"child": {
+		"id": "c_demo_lele",
+		"name": "乐乐",
+		"age": 7,
+		"interests": "恐龙、太空",
+		"createdAt": 1719900000000
+	},
+	"gate": { "mode": "off" },
+	"privacyMode": false,
+	"safety": { "blockScary": true, "softLanguage": true },
+	"prefs": {
+		"childId": "c_demo_lele",
+		"weights": {
+			"observe_express": 1,
+			"narrative_logic": 1.2,
+			"imagination": 1.4,
+			"problem_solving": 0.9
+		},
+		"lockSupport": "auto"
+	},
+	"works": [
+		{
+			"id": "w_demo_dino",
+			"title": "会飞的恐龙",
+			"createdAt": 1720000000000,
+			"updatedAt": 1720003600000,
+			"childId": "c_demo_lele",
+			"sceneNote": "绿色恐龙 + 月亮",
+			"dimHistory": ["observe_express", "imagination", "narrative_logic"],
+			"dialog": [
+				{ "role": "user", "content": "这是一只绿色的恐龙", "at": 1720000100000 },
+				{ "role": "assistant", "content": "它有几条腿呀？你数数看。", "at": 1720000110000 },
+				{ "role": "user", "content": "四条腿，还要飞到月亮上", "at": 1720000200000 },
+				{ "role": "assistant", "content": "飞到月亮上会看见什么呢？", "at": 1720000210000 },
+				{ "role": "user", "content": "因为月亮亮亮的，它想去玩", "at": 1720000300000 },
+				{ "role": "assistant", "content": "然后呢？它怎么回家？", "at": 1720000310000 }
+			]
+		},
+		{
+			"id": "w_demo_bridge",
+			"title": "过河的小船",
+			"createdAt": 1720086400000,
+			"updatedAt": 1720089000000,
+			"childId": "c_demo_lele",
+			"sceneNote": "河 + 船",
+			"dimHistory": ["problem_solving", "observe_express"],
+			"dialog": [
+				{ "role": "user", "content": "河太宽了过不去", "at": 1720086500000 },
+				{ "role": "assistant", "content": "没有桥的时候，还可以怎么过去呢？", "at": 1720086510000 },
+				{ "role": "user", "content": "用小船划过去", "at": 1720086600000 },
+				{ "role": "assistant", "content": "好主意！船上还要带什么？", "at": 1720086610000 }
+			]
+		}
+	],
+	"dimensionStates": [
+		{
+			"childId": "c_demo_lele",
+			"dimension": "observe_express",
+			"strength": 0.48,
+			"evidenceCount": 4,
+			"lastEvidenceAt": 1720000110000,
+			"supportBias": "normal",
+			"note": "会说颜色和数量",
+			"updatedAt": 1720000110000
+		},
+		{
+			"childId": "c_demo_lele",
+			"dimension": "narrative_logic",
+			"strength": 0.42,
+			"evidenceCount": 2,
+			"lastEvidenceAt": 1720000310000,
+			"supportBias": "normal",
+			"note": "开始说因为…然后",
+			"updatedAt": 1720000310000
+		},
+		{
+			"childId": "c_demo_lele",
+			"dimension": "imagination",
+			"strength": 0.55,
+			"evidenceCount": 5,
+			"lastEvidenceAt": 1720000210000,
+			"supportBias": "normal",
+			"note": "飞到月亮",
+			"updatedAt": 1720000210000
+		},
+		{
+			"childId": "c_demo_lele",
+			"dimension": "problem_solving",
+			"strength": 0.4,
+			"evidenceCount": 2,
+			"lastEvidenceAt": 1720086600000,
+			"supportBias": "high",
+			"note": "过河想办法",
+			"updatedAt": 1720086600000
+		}
+	],
+	"events": [
+		{
+			"id": "e_demo_sd1",
+			"childId": "c_demo_lele",
+			"workId": "w_demo_dino",
+			"verb": "said",
+			"object": "这是一只绿色的恐龙",
+			"context": { "text": "这是一只绿色的恐龙", "source": "type", "chars": 9, "engagement": "flowing" },
+			"at": 1720000100000
+		},
+		{
+			"id": "e_demo_dp1",
+			"childId": "c_demo_lele",
+			"workId": "w_demo_dino",
+			"verb": "dimension_practiced",
+			"object": "observe_express",
+			"context": { "dimension": "observe_express", "support": "normal", "crowd": "wh" },
+			"at": 1720000105000
+		},
+		{
+			"id": "e_demo_pr1",
+			"childId": "c_demo_lele",
+			"workId": "w_demo_dino",
+			"verb": "partner_replied",
+			"object": "它有几条腿呀？你数数看。",
+			"context": { "line": "它有几条腿呀？你数数看。", "preferQuestion": true, "proactive": false },
+			"at": 1720000110000
+		},
+		{
+			"id": "e_demo_cc1",
+			"childId": "c_demo_lele",
+			"workId": "w_demo_dino",
+			"verb": "canvas_changed",
+			"object": "w_demo_dino",
+			"context": { "added": 3, "removed": 0, "summary": "画了恐龙" },
+			"at": 1720000120000
+		},
+		{
+			"id": "e_demo_sd2",
+			"childId": "c_demo_lele",
+			"workId": "w_demo_dino",
+			"verb": "said",
+			"object": "四条腿，还要飞到月亮上",
+			"context": { "text": "四条腿，还要飞到月亮上", "source": "type", "chars": 11, "engagement": "flowing" },
+			"at": 1720000200000
+		},
+		{
+			"id": "e_demo_dp2",
+			"childId": "c_demo_lele",
+			"workId": "w_demo_dino",
+			"verb": "dimension_practiced",
+			"object": "imagination",
+			"context": { "dimension": "imagination", "support": "normal", "crowd": "open" },
+			"at": 1720000205000
+		},
+		{
+			"id": "e_demo_pr2",
+			"childId": "c_demo_lele",
+			"workId": "w_demo_dino",
+			"verb": "partner_replied",
+			"object": "飞到月亮上会看见什么呢？",
+			"context": { "line": "飞到月亮上会看见什么呢？", "preferQuestion": true, "proactive": false },
+			"at": 1720000210000
+		},
+		{
+			"id": "e_demo_sd3",
+			"childId": "c_demo_lele",
+			"workId": "w_demo_dino",
+			"verb": "said",
+			"object": "因为月亮亮亮的，它想去玩",
+			"context": { "text": "因为月亮亮亮的，它想去玩", "source": "type", "chars": 12, "engagement": "flowing" },
+			"at": 1720000300000
+		},
+		{
+			"id": "e_demo_dp3",
+			"childId": "c_demo_lele",
+			"workId": "w_demo_dino",
+			"verb": "dimension_practiced",
+			"object": "narrative_logic",
+			"context": { "dimension": "narrative_logic", "support": "normal", "crowd": "recall" },
+			"at": 1720000305000
+		},
+		{
+			"id": "e_demo_pr3",
+			"childId": "c_demo_lele",
+			"workId": "w_demo_dino",
+			"verb": "partner_replied",
+			"object": "然后呢？它怎么回家？",
+			"context": { "line": "然后呢？它怎么回家？", "preferQuestion": true, "proactive": false },
+			"at": 1720000310000
+		},
+		{
+			"id": "e_demo_sd4",
+			"childId": "c_demo_lele",
+			"workId": "w_demo_bridge",
+			"verb": "said",
+			"object": "河太宽了过不去",
+			"context": { "text": "河太宽了过不去", "source": "type", "chars": 7, "engagement": "stuck" },
+			"at": 1720086500000
+		},
+		{
+			"id": "e_demo_dp4",
+			"childId": "c_demo_lele",
+			"workId": "w_demo_bridge",
+			"verb": "dimension_practiced",
+			"object": "problem_solving",
+			"context": { "dimension": "problem_solving", "support": "high", "crowd": "wh" },
+			"at": 1720086505000
+		},
+		{
+			"id": "e_demo_pr4",
+			"childId": "c_demo_lele",
+			"workId": "w_demo_bridge",
+			"verb": "partner_replied",
+			"object": "没有桥的时候，还可以怎么过去呢？",
+			"context": { "line": "没有桥的时候，还可以怎么过去呢？", "preferQuestion": true, "proactive": false },
+			"at": 1720086510000
+		},
+		{
+			"id": "e_demo_sd5",
+			"childId": "c_demo_lele",
+			"workId": "w_demo_bridge",
+			"verb": "said",
+			"object": "用小船划过去",
+			"context": { "text": "用小船划过去", "source": "type", "chars": 6, "engagement": "normal" },
+			"at": 1720086600000
+		},
+		{
+			"id": "e_demo_dp5",
+			"childId": "c_demo_lele",
+			"workId": "w_demo_bridge",
+			"verb": "dimension_practiced",
+			"object": "problem_solving",
+			"context": { "dimension": "problem_solving", "support": "normal", "crowd": "completion" },
+			"at": 1720086605000
+		},
+		{
+			"id": "e_demo_pr5",
+			"childId": "c_demo_lele",
+			"workId": "w_demo_bridge",
+			"verb": "partner_replied",
+			"object": "好主意！船上还要带什么？",
+			"context": { "line": "好主意！船上还要带什么？", "preferQuestion": true, "proactive": false },
+			"at": 1720086610000
+		}
+	]
+}

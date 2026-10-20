@@ -7,3 +7,13 @@ server/.env
 playwright-report/
 test-results/
 server/config.json
+
+apps/shenbi-maliang-v4/node_modules/
+apps/shenbi-maliang-v4/.next/
+apps/shenbi-maliang-v4/out/
+apps/shenbi-maliang-v4/build/
+apps/shenbi-maliang-v4/.env*
+!apps/shenbi-maliang-v4/.env.example
+apps/shenbi-maliang-v4/e2e/artifacts/
+apps/shenbi-maliang-v4/docs/audit-shots/
+apps/shenbi-maliang-v4/*.tsbuildinfo

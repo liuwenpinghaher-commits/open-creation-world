@@ -1,0 +1,36 @@
+{
+	"name": "shenbi-maliang",
+	"version": "0.4.0",
+	"private": true,
+	"scripts": {
+		"dev": "next dev",
+		"build": "next build",
+		"start": "next start",
+		"lint": "next lint",
+		"test": "vitest run",
+		"typecheck": "tsc --noEmit",
+		"e2e": "playwright test",
+		"e2e:ui": "playwright test --ui",
+		"e2e:headed": "E2E_HEADED=1 playwright test",
+		"e2e:demo": "node scripts/e2e-demo.mjs",
+		"e2e:show": "node scripts/e2e-show.mjs"
+	},
+	"dependencies": {
+		"dexie": "^4.4.4",
+		"next": "14.0.3",
+		"react": "^18",
+		"react-dom": "^18",
+		"tldraw": "^3.14.2"
+	},
+	"devDependencies": {
+		"@types/node": "^20",
+		"@types/react": "^18",
+		"@types/react-dom": "^18",
+		"eslint": "^8",
+		"eslint-config-next": "14.0.3",
+		"fake-indexeddb": "^6.0.0",
+		"playwright": "^1.57.0",
+		"typescript": "^5",
+		"vitest": "^2.1.9"
+	}
+}

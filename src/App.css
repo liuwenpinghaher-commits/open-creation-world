@@ -15,6 +15,27 @@ body,
   font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
 }
 
+/* 语音相位极轻指示（不挡画笔） */
+.voice-phase-dot {
+  position: absolute;
+  top: 16px;
+  left: 16px;
+  z-index: 12;
+  font-size: 12px;
+  font-weight: 600;
+  color: #5a6570;
+  background: rgba(255, 255, 255, 0.88);
+  border-radius: 999px;
+  padding: 4px 10px;
+  box-shadow: 0 2px 8px rgb(40 50 66 / 12%);
+  pointer-events: none;
+}
+.voice-phase-dot[data-phase='sleep'] { opacity: 0.55; }
+.voice-phase-dot[data-phase='thinking'] { color: #6b4cff; }
+.voice-phase-dot[data-phase='speaking'],
+.voice-phase-dot[data-phase='barge_candidate'] { color: #c45c12; }
+.voice-phase-dot[data-phase='follow_up'] { color: #0a7a4b; }
+
 /* 顶部居中的儿童工具：画笔 / 橡皮 / 撤销 / 清空 */
 .kid-tools {
   position: absolute;

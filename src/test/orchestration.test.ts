@@ -1,14 +1,13 @@
 import { describe, it, expect } from 'vitest'
-import { shouldAutoTurn, shouldAutoStory, shouldSendImage, storyMap, filterWorksByChild, sceneNoteOf } from '../app/orchestration'
+import { shouldAutoStory, shouldSendImage, storyMap, filterWorksByChild, sceneNoteOf } from '../app/orchestration'
 import { emptySession } from '../store/sessionStore'
 import type { LearningStory } from '../types/settings'
 
-describe('shouldAutoTurn（B1 纯画自动一拍）', () => {
-  it('空闲+有新画+有形状 才发起', () => {
-    expect(shouldAutoTurn('idle', true, 2)).toBe(true)
-    expect(shouldAutoTurn('thinking', true, 2)).toBe(false) // 正在处理
-    expect(shouldAutoTurn('idle', false, 2)).toBe(false) // 没新画
-    expect(shouldAutoTurn('idle', true, 0)).toBe(false) // 空画布
+describe('shouldSendImageEx', () => {
+  it('sleep/隐私不传图；活跃首句可 force', async () => {
+    const { shouldSendImageEx } = await import('../app/orchestration')
+    expect(shouldSendImageEx({ drew: true, privacy: false, voiceActive: false })).toBe(false)
+    expect(shouldSendImageEx({ drew: false, privacy: false, voiceActive: true, forceFirstUtterance: true })).toBe(true)
   })
 })
 
